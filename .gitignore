@@ -175,3 +175,6 @@ docs/local/
 
 # Local-only experiments (not shared)
 local/
+
+# Personal editor settings
+.vscode/

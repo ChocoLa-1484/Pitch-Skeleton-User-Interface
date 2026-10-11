@@ -10,7 +10,15 @@
 > **接手的 AI 請先讀這一段。** 這裡記錄「上一位助手做到哪、下一步該做什麼」，每完成一個階段性步驟就會更新。
 > 若此區塊顯示「無進行中任務」，代表上一段工作已告一段落，可直接從下方待辦清單挑選。
 
-**更新時間**：2026-10-08 22:00
+**更新時間**：2026-10-11
+
+**【同學 PR #1 處理中（2026-10-11）】**
+- PR 作者 ChocoLa-1484（naiyanyang@gmail.com）。他的 fork 沒有在歷史改寫後 Discard，而是在舊歷史上修改再合併新 main → PR 含 104 個 commit（102 個為舊歷史副本，含 Claude 標記與學長作者），直接合併會讓 Contributors 再出現 Claude、並帶回已刪除的 `Src/mmengine_main` 等 1586 個檔案。**不可直接按 GitHub 的 Merge**
+- 處理方式：本機分支 `pr1-clean` = main + cherry-pick 他的 commit 3233eaf（作者保留為他），再加一個整理 commit（移除 `.vscode/settings.json`、`docs/bullpen.docx`，`.gitignore` 加 `.vscode/`）。`review-pr1` 為原始 PR 內容。兩者皆未推送
+- 已驗證：他的測試 77 通過 2 略過（需他本機錄影）；主視窗含模型可正常建立；本 repo 先前的功能（曝光輸入框、179 FPS、校正快照、P1-006）合併後仍在
+- 內容摘要：補上「右肩外旋」定義（P1-005 根因）；2D 讀回已存分析與重新分析／儲存（P1-003）；3D 分頁 PnP／8Points 棋盤外參與公制三角化、幀偏移預設 0、品質過濾；新校正工具 `calibrate.py`、十字架、螢光球、跨步量測與 `main_metric.py`；JSON 原子寫入；新增 5 份文件於 `docs/`
+- 注意：3D 匯出拿掉 0.818 倍率（原本畫面沒乘、JSON 有乘，現已一致）；「回放比較」分頁 `video_widget_compare.py:860,871` 仍乘 0.818，待統一
+- **待辦**：(1) 使用者在 `pr1-clean` 實機操作 2D 回放（載入→分析→MER/BR 是否出現→切換影片後是否讀回）；(2) 通過後合併 `pr1-clean` 到 main 並推送，在 GitHub 關閉 PR #1 並說明；(3) 通知同學 Sync fork → Discard、本機 `git reset --hard origin/main`；(4) 他新增的 5 份文件之後考慮整併進 DEVELOPMENT.md（使用者偏好文件不要越加越多）
 **當前任務**：
 - 已修正（2026-10-09，P1-008）：校正取樣的 `numpy.AxisError`。`calib.py` 統一角點為 `(N, 1, 2)` 保存，比較時兩邊展為 `(N, 2)`，避免越界與二／三維混用造成的錯誤廣播；角點數改變時拒收並提示清空樣本。`calibrate.py` 重新掃描現在顯示偵測數、序號、零台與錯誤原因；新取像優先選連線相機，保留仍連線的角色選擇，勾選重用內參時保留離線序號。
 - 驗證：`conda run -n Pitcher --no-capture-output python -m unittest discover -s Src/UI_Control/tests -v`，13 項通過；實際 SDK 與校正視窗的啟動／重掃均找到 SN25462481、SN25462483。未取實體棋盤格樣本，下一步由使用者重啟校正工具、確認正面／側面角色後實拍。進場前已有未提交的精靈、工作流程與文件變更，本輪保留，尚未合併提交。
@@ -180,7 +188,7 @@
 ### [P1-003] 2D 分頁沒有讀取已分析 JSON 的功能，每次載入都重跑推論
 
 - **登記日期**：2026-09-22
-- **狀態**：`OPEN`
+- **狀態**：`FIXED`（2026-10-11，同學 PR #1：`pitch_widget._load_saved_analysis`、`save_current_analysis`、`restart_video_analysis`；待使用者實機確認）
 - **優先序**：高（嚴重影響操作效率）
 - **症狀**：在「回放」模式下載入影片時，即使該影片先前已分析過、資料夾內已有骨架 JSON，系統仍會從頭跑一次完整推論，等待時間長。
 - **成因**：`pitch_widget.py` 完全沒有使用 `JsonLoader`——全檔搜尋顯示 `is_processed` 只在第 400 行被設為 `False`，之後從未被讀取；也沒有任何 `loadProcessedData()` 之類的方法。相對地，3D 分頁（`video_widget_2.py`）有兩條載入路徑：`loadVideo()`（重跑推論）與 `loadProcessedData()`（用 `JsonLoader` 讀既有結果）。**2D 分頁只實作了前者**。
@@ -204,7 +212,7 @@
 ### [P1-005] MER（肩最大外旋）與 BR（球離手）關鍵幀經常偵測不到
 
 - **登記日期**：2026-09-22
-- **狀態**：`OPEN`（待釐清屬於門檻設定問題或估測精度問題）
+- **狀態**：`FIXED`（2026-10-11，同學 PR #1；待使用者實機確認）。**真正的根本原因不是 140° 門檻**：2D 分析（`pitch_widget.py`、`utils/analyze.py`、`utils/vis_image.py`）讀取「右肩外旋」角度，但實際使用的 `skeleton/detect_skeleton.py` 沒有定義它（只有未使用的 `detect_skeleton_new.py` 有 `'右肩外旋': [10, 8, 8]`，P2-002 未完成遷移的遺留）→ 角度永遠算不出、MER 無法確認、BR 也不會開始偵測。PR 補上定義。此角度是 2D 投影的「右前臂相對手肘水平線」，不是解剖學真實肩外旋
 - **優先序**：中
 - **症狀**：多支影片分析後，FC（前導腳著地）正常顯示且數值合理（跨步距離 127～129 cm），但「肩最大外旋」與「球離手」兩格始終空白。
 - **成因**：`_track_max_shoulder_rotation()` 中，MER 需同時滿足兩個條件才會確認並顯示：
@@ -282,6 +290,10 @@
 - **優先序**：低（不影響錄影與分析）
 - **症狀**：每次錄完都印 `[TabletCapture] error: OCR init failed: 'type' object is not subscriptable`。
 - **推測成因**：此訊息通常是 Python 3.9+ 型別寫法（如 `list[str]`）在 Python 3.8 執行所致，待查是 `capture_tablet_images.py` 還是其相依套件。
+- **功能說明（2026-10-11 查證）**：錄完一球、影片載入回放時（`pitch_widget.checkVideoLoad` → `startTabletCapture(enable_ocr=True)`），從鏡頭（`tablet_source="0"`，例如 DroidCam）擷取 Rapsodo 平板畫面，裁出固定 ROI 做 OCR，結果顯示在 2D 分頁 Rapsodo 區並寫入 `*_BRandRapsodo.json`（學姊論文第 253 段）。
+- **影響**：因 OCR 一直失敗，所有錄影的 `metrics`（球速、轉速、旋轉方向）**從來沒有讀到**，Rapsodo 整合功能實際上沒有運作，也連帶造成 P1-007
+- `Db\Record\TabletCapture\` 永遠是空的：建立資料夾的程式還在，但存裁切圖的 `_save_crop` 呼叫已被註解（`capture_tablet_images.py:342`），可忽略或刪除
+- **優先序待使用者決定**：取決於牛棚是否需要 Rapsodo 數據
 
 ### [P2-002] 未完成的架構遷移：新舊兩套推論後端並存
 
