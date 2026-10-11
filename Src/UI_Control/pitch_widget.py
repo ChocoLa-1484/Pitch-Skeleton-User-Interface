@@ -2168,6 +2168,17 @@ class PosePitchTabControl(QWidget):
                         video_item.setText(0, file)
                         video_item.setData(0, 1, video_path)  # 儲存影片路徑
 
+    @staticmethod
+    def _find_side_video(folder):
+        """回傳資料夾內的側面原始影片（CS_*.mp4，排除畫好骨架的 _Sk26），沒有則回傳 None"""
+        try:
+            names = sorted(n for n in os.listdir(folder)
+                           if n.upper().startswith("CS_") and n.lower().endswith(".mp4")
+                           and "_SK26" not in n.upper())
+        except OSError:
+            return None
+        return os.path.abspath(os.path.join(folder, names[0])) if names else None
+
     def play_video_from_item(self):
         """從 Tree 中選擇一個影片資料夾（或兩部影片）並播放"""
         import gc
@@ -2222,6 +2233,18 @@ class PosePitchTabControl(QWidget):
             video_paths = [os.path.abspath(selected_items[0].data(0, 1))]
         else:
             video_paths = []
+
+        # 只點一個項目（一支影片或一球的資料夾）時，一律改用該球的側面（CS）影片做單影片分析：
+        # 2D 生物力學只用側面計算，只選到正面（CF）會分析錯視角（TODO P1-001）。
+        # 刻意按住 Ctrl 同時選 CF + CS 時維持雙影片模式。
+        if len(selected_tree_items) == 1 and video_paths:
+            side_path = self._find_side_video(os.path.dirname(video_paths[0]))
+            if side_path:
+                if [side_path] != video_paths:
+                    print(f"[2D] 自動改用側面影片：{os.path.basename(side_path)}")
+                video_paths = [side_path]
+            elif os.path.basename(video_paths[0]).upper().startswith("CF_"):
+                print("[2D] 這一球沒有側面（CS_）影片，只能用正面分析，結果可能不正確")
 
         # Analysis uses the second camera as the side view, independently of
         # the order in which two tree items were selected.
