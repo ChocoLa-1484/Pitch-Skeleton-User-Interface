@@ -390,6 +390,13 @@
 - [x] 確認 FLIR 有 ARM64 Linux 版 Spinnaker SDK — 廠商已提供 `spinnaker-4.4.0.246-noble-arm64-pkg.tar.gz`
 - [ ] （暫停）其餘 GB10 相關驗證，待實際需要監看功能時再啟動
 
+### 顯卡升級至 RTX 50 系列（2026-10-11 使用者提出，之後再處理）
+
+分析主機未來可能換 5090。**現行環境（Python 3.8 + PyTorch 2.0.1 + CUDA 11.8）無法在 50 系列執行**（Blackwell 需 CUDA 12.8 + PyTorch ≥ 2.7，未實機驗證）。40 系列以前的卡沿用現行環境即可。
+
+- [ ] 升級牽動整套環境：PyTorch 2.7 不支援 Python 3.8 → 改 3.10；mmcv 無對應預編譯版本需自行編譯；PySpin 需換新版 Spinnaker 的 cp310 wheel
+- [ ] 另開分支在新卡上重建環境並更新 `environment/` 鎖定檔；升級後須比對骨架、關鍵幀結果與舊環境一致
+
 ### 台鋼場地架設（未來，非當前工作）
 
 場勘圖：`docs/TSG_Bullpen_Carmera_Positionpicture.jpg`
