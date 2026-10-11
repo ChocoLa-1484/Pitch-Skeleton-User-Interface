@@ -1,4 +1,5 @@
 import pyqtgraph as pg
+import numpy as np
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QSizePolicy
 from PyQt5 import QtCore
@@ -138,13 +139,14 @@ class GraphPlotter():
             _, speed_value = self.pose_analyzer.get_frame_angleOrSpeed_data(frame_num=frame_num, speed_name=speed_name)
             try:
                 speed_value = float(speed_value)
-            except TypeError:
-                speed_value = 0
+            except (TypeError, ValueError):
+                speed_value = float('nan')
             scatter = pg.ScatterPlotItem([frame_num], [speed_value], size=5, brush='r')
             plot.addItem(scatter)
 
             # 更新標題顯示當前幀速度
-            plot.setTitle(f"{title}: {speed_value:.2f}", size='8pt')
+            label = f'{speed_value:.2f}' if np.isfinite(speed_value) else '--'
+            plot.setTitle(f"{title}: {label}", size='8pt')
         self.draw_vertical_lines(*self._pending_verticals) if hasattr(self, '_pending_verticals') else None
     
     def resize_graph(self,width, height):

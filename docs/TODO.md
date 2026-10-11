@@ -1,7 +1,7 @@
 # 專案工作區（AI 協作規範 + 問題追蹤 + 待辦）
 
 > **這份文件給 AI 助手看**（Claude / GPT / 其他模型）。人類閱讀的白話說明請見 [DEVELOPMENT.md](DEVELOPMENT.md)。
-> 最後更新：2026-10-07
+> 最後更新：2026-10-09
 
 ---
 
@@ -12,6 +12,8 @@
 
 **更新時間**：2026-10-08 22:00
 **當前任務**：
+- 已修正（2026-10-09，P1-008）：校正取樣的 `numpy.AxisError`。`calib.py` 統一角點為 `(N, 1, 2)` 保存，比較時兩邊展為 `(N, 2)`，避免越界與二／三維混用造成的錯誤廣播；角點數改變時拒收並提示清空樣本。`calibrate.py` 重新掃描現在顯示偵測數、序號、零台與錯誤原因；新取像優先選連線相機，保留仍連線的角色選擇，勾選重用內參時保留離線序號。
+- 驗證：`conda run -n Pitcher --no-capture-output python -m unittest discover -s Src/UI_Control/tests -v`，13 項通過；實際 SDK 與校正視窗的啟動／重掃均找到 SN25462481、SN25462483。未取實體棋盤格樣本，下一步由使用者重啟校正工具、確認正面／側面角色後實拍。進場前已有未提交的精靈、工作流程與文件變更，本輪保留，尚未合併提交。
 - 筆電安裝包 `C:\Users\user\Downloads\Pitcher_筆電安裝包\` **已實測通過**（全新 conda 環境照「安裝順序.txt」安裝 → 版本與 Pitcher 環境逐一比對一致（僅刻意排除 mmcv-full）→ 實際載入 YOLO + ViTPose 模型與 PySpin 成功），測試環境已刪除。試裝過程修正 4 個問題：pip 用 cp950 讀 requirements（鎖定檔改純 ASCII）、原環境有刻意的依賴不一致（改 `--no-deps`）、mm 子專案 setup.py 需 torch（加 `--no-build-isolation`）、freeze 漏 setuptools（補 60.2.0）。另注意：未 `conda activate` 直接呼叫 python.exe 時，numpy 會載到 base 環境的 MKL 而當機，安裝與執行一律在已啟動的環境中進行
 - 已完成：README 改寫（2026-10-07）。版本鎖定檔放進 repo 的 `environment\`（不用 `env\`：`.gitignore` 的 `ENV/` 在 Windows 不分大小寫會忽略它）。根目錄舊的 `requirements.txt`（numpy==1.23.5 等）已過時、README 不再引用，待決定是否刪除
 - 已完成：UI_Control 資料檔整理（2026-10-07）。舊設備校正 → `Db\Calibration\old_rig_20260223\`（`side_camera_calib.npz` 改名 `front_camera_calib.npz`，內容其實是正面 50mm 內參 fx 7927.87）；輸出/截圖 → `Db\Archive\UI_Control_20261007\`；4 支舊工具改用 `calib_store.OLD_RIG_DIR` 並實測可讀。注意：舊的 `stereo_calib.json` 與 `stereo_calib.npz` 本來就是兩次不同校正（fx 1060.45 vs 1061.90），勿用 `extract_calib.py` 覆蓋 json
@@ -231,6 +233,15 @@
 - **建議修正**：`metrics = data.get("metrics") or {}`，球速/轉速缺值時顯示 N/A（約 3 行）
 - **附帶**：欄位為 `velocity_mph`，畫面標示卻是 `kph`，單位不一致，有資料後會差 1.6 倍
 - **連帶待驗證**：錄影校正快照的「3D 分頁讀取」端尚未實機驗證（崩潰發生在 `applyCalibration` 之前）。錄影端已驗證：5 球皆有 `calibration.json`
+
+### [P1-008] 校正取樣角點維度越界，重新掃描相機缺少結果提示
+
+- **登記日期**：2026-10-09
+- **狀態**：已修正；13 項回歸測試通過，實際重掃找到兩台相機，待現場棋盤格取樣驗證。
+- **症狀**：`calibrate.py` 按空白鍵取樣，經 `Collector.capture_sample()` 進入 `calib.py` 第 328 行，出現 `numpy.AxisError: axis 2 is out of bounds for array of dimension 2`。使用者另回報重新掃描不能用。
+- **成因**：重複樣本判斷固定用 `axis=2`，未統一角點的 `(N, 2)`／`(N, 1, 2)` 形狀；兩種形狀混用還會廣播成所有點兩兩比較，漏掉重複樣本。精靈掃描無成功／零台提示，並把舊校正序號與線上序號合併且保留舊選擇；本機 SDK 連續兩次掃描均成功，尚無 SDK 失效證據。
+- **影響範圍**：單台 `calib.py` 與整合 `calibrate.py` 的棋盤格取樣；整合工具設定頁的相機重掃與角色預選。
+- **修正**：統一角點形狀後逐點算位移，角點數不符時拒收；重掃顯示本次結果，連線序號優先，保留可用角色及離線匯入用途。測試見 `Src/UI_Control/tests/test_calibration_capture.py`。
 
 ### [P2-003] 自動錄影實際只有約 66～69 FPS，不是 179 FPS
 

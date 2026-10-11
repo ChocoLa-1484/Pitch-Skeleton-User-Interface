@@ -322,10 +322,18 @@ class CalibWindow(QMainWindow):
         # 亞像素精修，提升角點定位精度
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+        # OpenCV bindings can return either (N, 2) or (N, 1, 2).
+        # Store one layout and compare matching points without broadcasting.
+        corners = np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2)
 
         # 板子沒移動就重複擷取，等於同一組資料算好幾次，會讓誤差假性偏低
         if self.imgpoints:
-            shift = np.mean(np.linalg.norm(corners - self.imgpoints[-1], axis=2))
+            previous = np.asarray(self.imgpoints[-1]).reshape(-1, 2)
+            current = corners.reshape(-1, 2)
+            if current.shape != previous.shape:
+                self.log("未擷取：棋盤格角點數與既有樣本不同，請恢復原規格或清空樣本後重拍。")
+                return
+            shift = np.mean(np.linalg.norm(current - previous, axis=1))
             if shift < self.DUPLICATE_SHIFT_PX:
                 self.log(f"未擷取：與上一組幾乎相同（平均位移 {shift:.1f} px），請移動或傾斜板子後再擷取。")
                 return

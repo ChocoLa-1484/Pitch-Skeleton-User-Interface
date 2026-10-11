@@ -104,6 +104,25 @@ pip install --force-reinstall --no-deps opencv-python==4.8.1.78
 
 所有校正結果都存在 `Db\Calibration\`（不進 git），程式會自動讀取，不必再手動把數字貼進程式碼。
 
+**整合入口（2026-10-09）**：專案根目錄執行 `python Src/UI_Control/calibrate.py`。以校正精靈整合下面的 1–5 步，不載入骨架模型；內參重用 `calib.CalibWindow` 的取樣、角點與品質評估，計算放到背景執行，結果先暫存於本次 session。兩台內參及外參都成功後，才一起寫入現用校正檔。
+
+- 全新內參每台至少 15 組，RMS 須 ≤ 1 px；覆蓋區域、傾斜角度等建議列在紀錄。保留原始棋盤格照片與 NPZ 角點，方便重算。
+- 外參照片至少 4 組、每張 6 點，正面與側面必須同名；拍照與標註都在同一視窗。左右 1–6 必須對應同一實體球心。滾輪縮放、Ctrl＋拖曳平移、右鍵撤銷。最後一張不必再切換即可保存。
+- `cv_utils/calibration_workflow.py` 提供驗證、RANSAC、內點重估、誤差與發布處理。F 方向維持 `x_front^T F x_side = 0`，固定隨機種子；至少 12 內點且比例 ≥ 50% 才接受。門檻預設 3 px、可調，**誤差採左右兩側點到對極線距離的較大值**，與舊 `02` 的單側 1 px 門檻不同，比較報告時須使用一致門檻與資料。
+- 目前 3D 消費端使用原始像素；本工具也維持 `raw_pixels` 的 F，未單獨對外參點去畸變，以免座標系不一致。若日後改成去畸變的棋盤格外參，須同步修改重建端。擬合誤差不能代替獨立尺寸／3D 精度驗證；這版未自動完成舊步驟 6 的 340 mm 尺度驗證。
+- `sessions/<時間>_wand/` 包含 `session.json`（角色、內參快照、棋盤格規格、狀態）、`cf/`、`cs/`、`selected_points_cf.json`、`selected_points_cs.json`、`intrinsic/`、`report.json`。點位逐次保存為草稿，中途取消不改現用值。草稿保留供檢查，尚未提供重開精靈後的自動續作。
+- 發布前備份被取代的檔案到 session 的 `previous_calibration/`，逐檔以暫存檔取代；遇一般寫入例外會回復本次已取代檔案。這不是跨檔案的斷電交易，請勿同時開多個校正工具寫入。既有錄影快照不受影響。
+- 雙機取像沿用現有 `DualFlirSystem` 的 GPIO 設定，取像／釋放在同一工作執行緒；仍需現場驗證同步線、曝光與影像配對。
+
+回歸測試（使用合成幾何、模擬相機，不會修改現用校正資料）：
+
+```powershell
+conda activate Pitcher
+python -m unittest discover -s Src/UI_Control/tests -v
+```
+
+以下為原本仍保留的分步工具流程：
+
 | 步驟 | 執行 | 要接什麼 | 產出 |
 |---|---|---|---|
 | 1. 內參（每台各做一次） | `python calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |

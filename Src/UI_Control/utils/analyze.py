@@ -229,9 +229,14 @@ class PoseAnalyzer:
         if self.pose_estimater.person_df.empty:
             return False
 
-        person_df = self.pose_estimater.person_df[
-            self.pose_estimater.person_df['person_id'] == self.pose_estimater.person_id
-        ]
+        person_df = self.pose_estimater.person_df
+        selected_id = self.pose_estimater.person_id
+        if selected_id is not None:
+            person_df = person_df[person_df['person_id'] == selected_id]
+        elif person_df['person_id'].nunique() != 1:
+            # Single-person offline analysis need not require a manual person
+            # selection. Multiple people still require an explicit selection.
+            return False
 
         if frame_num is not None:
             person_df = person_df[person_df['frame_number'] <= frame_num]

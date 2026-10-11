@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from pathlib import Path
 
 from pitch_widget import SpinDirectionWidget
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(os.environ["CONDA_PREFIX"], "Library", "plugins", "platforms")
@@ -26,15 +27,21 @@ from triangulate_3d_viewer import Triangulate3DViewer
 import time
 from utils.keyframe_export import SimpleKeyframeLogger
 from cv_utils import calib_store
+from cv_utils.analysis_io import atomic_json, read_optional_json
+from cv_utils.chessboard_metric import DEFAULT_CALIBRATION
+from cv_utils.metric_session import load_rig
+from metric_3d_viewer import MetricTriangulate3DViewer
+from utils.analyze import PoseAnalyzer as PoseAnalyzer2D
 
 class SliderColorOverlay(QWidget):
-    def __init__(self, slider: QSlider, segments: list, segment_half_thickness: int = 10):
+    def __init__(self, slider: QSlider, segments: list, segment_half_thickness: int = 10, fps=67.):
         """
         slider: 你要疊的 QSlider
         segments: list of tuples (start_frame, end_frame, color)
         """
         super().__init__(slider.parent())
         self.slider = slider
+        self.fps = float(fps) if fps and fps > 0 else 67.
         self.segments = segments
         self.segment_half_thickness = max(2, int(segment_half_thickness))
         self.setAttribute(Qt.WA_TransparentForMouseEvents)  # 透明且不阻擋滑鼠
@@ -104,7 +111,7 @@ class SliderColorOverlay(QWidget):
             percentage = (duration / per_total) * 100
             
             # 格式化標籤：Frame 數 / 百分比
-            label = f"{duration*0.015:.2f}s"
+            label = f"{duration/self.fps:.2f}s"
             # label = f"{duration*0.047:.2f}s ({percentage:.1f}%)"
             
             # 定義文字繪圖區域
@@ -143,6 +150,355 @@ class PoseVideoTabControl(QWidget):
         self.initVar()
         self.setupComponents()
         self.bindUI()
+        self.setupCalibrationControls()
+
+    def setupCalibrationControls(self):
+        row = QHBoxLayout()
+        self.calibration_combo = QComboBox()
+        for label, method in [('PnP 棋盤校正', 'pnp'), ('8Points 棋盤尺度', '8point'), ('舊版估算（無公制校正）', 'legacy')]:
+            self.calibration_combo.addItem(label, method)
+        self.calibration_path = QLineEdit(str(DEFAULT_CALIBRATION / 'pnp' / 'stereo.json'))
+        browse = QPushButton('選擇外參…')
+        apply = QPushButton('套用校正')
+        self.offset_spin = QSpinBox()
+        self.offset_spin.setRange(-1000, 1000)
+        self.offset_spin.setToolTip('第二影片實際幀 = 第一影片幀 − 偏移；切換後請重新分析。')
+        self.reference_spin = QSpinBox()
+        self.reference_spin.setRange(0, 1000000)
+        self.heel_combo = QComboBox()
+        self.heel_combo.addItem('右後腳', 25)
+        self.heel_combo.addItem('左後腳', 24)
+        self.save_analysis_button = QPushButton('儲存分析 JSON')
+        for widget in (QLabel('3D 外參'), self.calibration_combo, self.calibration_path, browse, apply,
+                       QLabel('第二片偏移'), self.offset_spin, QLabel('初始幀'), self.reference_spin,
+                       self.heel_combo, self.save_analysis_button):
+            row.addWidget(widget)
+        self.ui.verticalLayout_6.insertLayout(0, row)
+        self.calibration_status = QLabel('PnP / 8Points：同一後腳腳跟的 3D 位移；需確認相機位置與校正時相同。')
+        self.calibration_status.setWordWrap(True)
+        self.ui.verticalLayout_6.insertWidget(1, self.calibration_status)
+        self.calibration_combo.currentIndexChanged.connect(self._calibration_method_changed)
+        browse.clicked.connect(self._browse_calibration)
+        apply.clicked.connect(self._apply_selected_calibration)
+        self.offset_spin.valueChanged.connect(self._invalidate_calibration)
+        self.reference_spin.valueChanged.connect(self._invalidate_calibration)
+        self.heel_combo.currentIndexChanged.connect(self._invalidate_calibration)
+        self.calibration_path.textEdited.connect(self._invalidate_calibration)
+        self.save_analysis_button.clicked.connect(lambda: self._complete_video_analysis(manual=True))
+        events = QHBoxLayout()
+        events.addWidget(QLabel('關鍵幀可先回放確認，再以目前幀修正：'))
+        for title, attr in [('FC', 'foot_contact_frame'), ('MER', 'max_shoulder_angle_frame'), ('BR', 'wrist_speed_frame')]:
+            button = QPushButton('設為 ' + title)
+            button.clicked.connect(lambda checked=False, name=attr: self._set_manual_event(name))
+            events.addWidget(button)
+        events.addStretch()
+        self.ui.verticalLayout_6.insertLayout(2, events)
+        self._analysis_dirty = False
+        self._calibration_ready = False
+        self._manual_events = set()
+        self.frame_offset = 0
+
+    def _calibration_method_changed(self):
+        method = self.calibration_combo.currentData()
+        if method != 'legacy':
+            self.calibration_path.setText(str(DEFAULT_CALIBRATION / method / 'stereo.json'))
+        self.calibration_path.setEnabled(method != 'legacy')
+        self._invalidate_calibration()
+
+    def _browse_calibration(self):
+        path, _ = QFileDialog.getOpenFileName(self, '選擇棋盤 stereo.json', self.calibration_path.text(), 'JSON (*.json)')
+        if path:
+            self.calibration_path.setText(path)
+            self._invalidate_calibration()
+
+    def _invalidate_calibration(self, *args):
+        self.is_play = False
+        self.ui.playBtn.setText('▶︎')
+        if hasattr(self, '_play_timer'):
+            self._play_timer.stop()
+        self._calibration_ready = False
+        self._analysis_dirty = False
+        self.pose_estimater.reset()
+        self.pose_estimater_2.reset()
+        self.resetPhaseDetection()
+        self.pose_analyzer.reset()
+        self.pose_analyzer_2.reset()
+        self.image_drawer.reset()
+        self.image_drawer_2.reset()
+        self.graph_plotter.reset()
+        self.graph_plotter.plots = []
+        for view in (self.ui.fcView, self.ui.merView, self.ui.brView):
+            if view.scene() is not None:
+                view.scene().clear()
+        if self.overlay is not None:
+            self.overlay.hide()
+            self.overlay.deleteLater()
+            self.overlay = None
+        self.calibration_status.setText('設定已變更，請套用校正並從頭分析。')
+
+    def _apply_selected_calibration(self):
+        if not self.video_loader.total_frames:
+            self.calibration_status.setText('請先載入兩部影片。')
+            return False
+        self._invalidate_calibration()
+        try:
+            self._create_viewer()
+            self.initGraph()
+            if self.is_processed:
+                self.loadProcessedData()
+            self.calibration_status.setText(self._calibration_description)
+            return True
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            self._calibration_ready = False
+            self.calibration_status.setText('無法套用校正：' + str(exc))
+            return False
+
+    def _create_viewer(self):
+        loader = self.video_loader
+        method = self.calibration_combo.currentData()
+        self._sources = {name: {'path': str(Path(path).resolve()), 'size': Path(path).stat().st_size,
+                                'mtime_ns': Path(path).stat().st_mtime_ns}
+                         for name, path in zip((loader.video_name, loader.video_name_2), (loader.video_path, loader.video_path_2))}
+        if method == 'legacy':
+            self.applyCalibration(loader.folder_path)
+            viewer = Triangulate3DViewer(self.K_S, self.K_F, self.F)
+            description = '舊版估算：固定倍率，距離與速度不具校正精度。'
+        else:
+            rig = load_rig(self.calibration_path.text())
+            if rig['method'] != method:
+                raise ValueError('所選方法與 stereo.json 的 method 不一致。')
+            names = [Path(str(n)).name[:2].lower() for n in (loader.video_name, loader.video_name_2)]
+            if set(names) != {'cf', 'cs'}:
+                raise ValueError('影片檔名須分別以 CF、CS 開頭，以識別內外參方向。')
+            fps_values = []
+            for camera, path, frames in zip(names, (loader.video_path, loader.video_path_2),
+                                            (loader.video_frames, loader.video_frames_2)):
+                if list(frames[0].shape[1::-1]) != rig['intrinsics'][camera]['image_size']:
+                    raise ValueError(f'{camera.upper()} 影片尺寸與內參不符。')
+                cap = cv2.VideoCapture(str(path))
+                try:
+                    fps_values.append(cap.get(cv2.CAP_PROP_FPS))
+                finally:
+                    cap.release()
+            if not np.isfinite(fps_values).all() or min(fps_values) <= 0 or abs(fps_values[0] - fps_values[1]) > .01:
+                raise ValueError('兩影片必須有相同且有效的 FPS；請先完成同步。')
+            viewer = MetricTriangulate3DViewer(self.calibration_path.text(), names[0], fps_values[0],
+                                              self.reference_spin.value(), self.heel_combo.currentData())
+            viewer.analysis_context = {'frame_offset': self.offset_spin.value(), 'sources': self._sources,
+                                       'video_name': loader.video_name, 'video_name_2': loader.video_name_2,
+                                       'frame_number_space': 'playback_timeline',
+                                       'second_source_frame': 'frame_number - frame_offset'}
+            description = f'{method}｜{fps_values[0]:g} fps｜後腳 3D 位移；無效關節不計值。校正尚需實尺驗證。'
+            if rig.get('warnings'):
+                description += ' ' + '；'.join(map(str, rig['warnings']))
+        # Share exactly the same reconstruction between the plot, labels and renderer.
+        old_viewers = {v for v in (self.viewer3d, self.pose_analyzer.viewer3D, self.pose_analyzer_2.viewer3D) if v is not None}
+        layout = self.ui.vispy_widget.layout()
+        while layout.count():
+            widget = layout.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+        for old in old_viewers:
+            old.timer.stop()
+            old.canvas.close()
+        self.viewer3d = viewer
+        self.pose_analyzer.viewer3D = viewer
+        self.pose_analyzer_2.viewer3D = viewer
+        self.frame_offset = self.offset_spin.value()
+        loader.frame_offset = self.frame_offset
+        self._active_method = method
+        self._output_name = f'{loader.video_name}_{method}'
+        viewer.setJsonPaths(loader.folder_path, self._output_name)
+        layout.addWidget(viewer.get_canvas().native)
+        self._calibration_description = description
+        metric = method != 'legacy'
+        self.ui.FC_label_2.setText('肩髖分離角度:\n' + ('同一後腳3D位移:' if metric else '跨步距離:'))
+        self.ui.BR_label_2.setText('右手腕速度:\n' + ('初始腳跟至手腕3D距離:' if metric else '出手點距離:'))
+        self.ui.MER_label_2.setText('手臂平面／軀幹角:' if metric else '肩外旋角度:')
+        if method != 'legacy' and not self._valid_stereo_frame(self.reference_spin.value()):
+            self._calibration_description += ' 初始幀超出雙目同步範圍，後腳位移將無法計算；請調整初始幀。'
+        self._calibration_ready = True
+        self._analysis_dirty = False
+        self.ui.startCodeBtn.setEnabled(True)
+
+    def _set_manual_event(self, attr):
+        if not self.video_loader.total_frames:
+            return
+        setattr(self, attr, self.ui.frameSlider.value())
+        self._manual_events.add(attr)
+        if attr == 'max_shoulder_angle_frame':
+            self.mer_locked = True
+        elif attr == 'wrist_speed_frame':
+            self.release_locked = True
+        self._analysis_dirty = True
+        self._render_keyframe_results()
+
+    def _valid_stereo_frame(self, frame):
+        loader = self.video_loader
+        return (0 <= frame < len(loader.video_frames)
+                and 0 <= frame - self.frame_offset < len(loader.video_frames_2))
+
+    def _calibrated_phase_detection(self, frame):
+        """Find candidate timing in CS images independently of 3D point quality.
+
+        These are right-handed-pitcher image heuristics, not measured ball release.
+        Manual FC/MER/BR corrections always take precedence.
+        """
+        if self.heel_combo.currentData() != 25 or not self._valid_stereo_frame(frame):
+            return  # Left-handed timing currently requires the manual event buttons.
+        side = self.pose_estimater if self.viewer3d.first_camera == 'cs' else self.pose_estimater_2
+        data = side.getPersonDf(frame_num=frame)
+        if data is None or len(data) != 1:
+            return
+        self._analysis_dirty = True
+        points = np.asarray(data.iloc[0]['keypoints'], float)
+        if points.shape[0] != 26 or not np.isfinite(points[:, :3]).all():
+            return
+        width = self.video_loader.video_size[0]
+        scale = width / 1920.
+        # Track the highest raised left knee and confirm with two descending frames.
+        if self.preparation_frame is None and self.foot_contact_frame is None and min(points[[11, 13], 2]) >= .5:
+            knee_y = points[13, 1]
+            if self.prev_left_knee_y is not None:
+                if not self.preparation_tracking_started and knee_y < points[11, 1] + 100 * scale and knee_y < self.prev_left_knee_y:
+                    self.preparation_tracking_started = True
+                    self.min_left_knee_y, self.candidate_preparation_frame = knee_y, frame
+                if self.preparation_tracking_started:
+                    if knee_y < self.min_left_knee_y:
+                        self.min_left_knee_y, self.candidate_preparation_frame = knee_y, frame
+                    self.preparation_descend_count = self.preparation_descend_count + 1 if knee_y > self.prev_left_knee_y else 0
+                    if self.preparation_descend_count >= 2:
+                        self.preparation_frame = self.candidate_preparation_frame
+            self.prev_left_knee_y = knee_y
+        if self.foot_contact_frame is None and self.preparation_frame is not None and min(points[[15, 16], 2]) >= .5:
+            helper = PoseAnalyzer2D(side, fps=self.viewer3d.fps)
+            recent = side.person_df[side.person_df.frame_number.between(frame - 4, frame)]
+            consecutive = set(recent.frame_number) == set(range(frame - 4, frame + 1))
+            if consecutive and abs(points[15, 0] - points[16, 0]) >= 200 * scale and helper.is_left_ankle_landed(frame, spatial_var_threshold=45 * scale ** 2):
+                self.foot_contact_frame = frame
+                self._render_keyframe_results()
+        if self.foot_contact_frame is None or frame <= self.foot_contact_frame or min(points[[6, 8, 10], 2]) < .5:
+            return
+        forearm = points[10, :2] - points[8, :2]
+        angle = np.degrees(np.arccos(np.clip(forearm[0] / max(np.linalg.norm(forearm), 1e-12), -1, 1)))
+        if not self.mer_locked:
+            if angle > self.max_shoulder_angle_value:
+                self.max_shoulder_angle_value, self.max_shoulder_angle_frame = angle, frame
+            elif self.max_shoulder_angle_value > 140 and self.max_shoulder_angle_value - angle > 3:
+                self.mer_locked = True
+                self._render_keyframe_results()
+        if self.max_shoulder_angle_frame is None or frame <= self.max_shoulder_angle_frame or self.release_locked:
+            return
+        prev = side.getPersonDf(frame_num=frame - 1)
+        if prev is None or len(prev) != 1:
+            return
+        previous = np.asarray(prev.iloc[0]['keypoints'], float)
+        if previous[10, 2] < .5:
+            return
+        speed = np.linalg.norm(points[10, :2] - previous[10, :2]) * self.viewer3d.fps
+        if points[10, 1] < points[6, 1] and speed > self.max_wrist_speed_after_er:
+            self.max_wrist_speed_after_er, self.wrist_speed_frame = speed, frame
+        elif self.max_wrist_speed_after_er > 0 and speed < .9 * self.max_wrist_speed_after_er and points[10, 0] > points[6, 0]:
+            self.release_locked = True
+            self._render_keyframe_results()
+
+    def _restore_keyframe_results(self):
+        """Restore only results made with these cameras, calibration and timeline."""
+        import pandas as pd
+        folder = Path(self.video_loader.folder_path)
+        path = folder / f'{self._output_name}_keyframes.json'
+        try:
+            data = read_optional_json(path, {})
+            meta = data.get('Analysis', {})
+            expected = {'frame_offset': self.frame_offset, 'video_name': self.video_loader.video_name,
+                        'video_name_2': self.video_loader.video_name_2, 'method': self._active_method,
+                        'sources': self._sources}
+            if getattr(self.viewer3d, 'metric', False):
+                expected.update({k: self.viewer3d.provenance()[k] for k in
+                                 ('calibration_sha256', 'reference_frame', 'heel_halpe_index', 'fps')})
+            if not data or any(meta.get(k) != v for k, v in expected.items()):
+                return
+            analysis = read_optional_json(folder / f'{self._output_name}_analysis.json', {})
+            if any(analysis.get('Analysis', {}).get(k) != v for k, v in expected.items()):
+                return
+            coordinates = read_optional_json(folder / f'{self._output_name}_3D.json', [])
+            if getattr(self.viewer3d, 'metric', False):
+                if not isinstance(coordinates, dict) or coordinates.get('calibration_sha256') != meta['calibration_sha256']:
+                    return
+                rows = coordinates.get('frames', [])
+                self.viewer3d.quality = {int(r['frame_number']): r['quality'] for r in rows}
+            else:
+                rows = coordinates
+            self.viewer3d.all_3d_frames = {int(r['frame_number']): np.asarray(r['keypoints'], float) for r in rows}
+            self.pose_analyzer.analyze_info = analysis.get('frames', [])
+            self.pose_analyzer.analyze_df = pd.DataFrame(self.pose_analyzer.analyze_info)
+            self.pose_analyzer.processed_frames = set(meta.get('analyzed_frames', []))
+            self.preparation_frame = (data.get('knee_up') or {}).get('frame_number')
+            for field, attr in [('foot_contact', 'foot_contact_frame'), ('max_shoulder_er', 'max_shoulder_angle_frame'), ('release', 'wrist_speed_frame')]:
+                setattr(self, attr, data.get(field, {}).get('frame_number'))
+            self.mer_locked, self.release_locked = meta.get('mer_confirmed', False), meta.get('br_confirmed', False)
+            self._manual_events = set(meta.get('manual_events', []))
+            self._phase_last_frame = max(meta.get('analyzed_frames', []), default=-1)
+            self._render_keyframe_results()
+            self.calibration_status.setText('已恢復相同校正與同步設定的分析；' + self._calibration_description)
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            self.calibration_status.setText(f'舊分析無法恢復，請重新分析：{exc}')
+
+    def _render_keyframe_results(self):
+        for frame, kind, view, button, label in (
+            (self.foot_contact_frame, 'foot_contact', self.ui.fcView, self.ui.footContact_ptn, self.ui.footContact_label),
+            (self.max_shoulder_angle_frame, 'max_shoulder_er', self.ui.merView, self.ui.maxER_ptn, self.ui.maxER_label),
+            (self.wrist_speed_frame, 'release', self.ui.brView, self.ui.release_ptn, self.ui.release_label)):
+            if frame is not None and 0 <= frame < (self.video_loader.total_frames or 0):
+                self._display_keyframe_with_text(frame, view, kind)
+                self._update_keyframe_label(frame, kind)
+                button.setEnabled(True)
+                label.setText(f'第 {frame} 幀')
+
+    def _complete_video_analysis(self, manual=False):
+        if not self._calibration_ready or not self._analysis_dirty:
+            return
+        self._render_keyframe_results()
+        loader = self.video_loader
+        metadata = {'method': self._active_method, 'frame_number_space': 'playback_timeline',
+                    'sources': self._sources,
+                    'video_name': loader.video_name, 'video_name_2': loader.video_name_2,
+                    'frame_offset': self.frame_offset, 'second_source_frame': 'frame_number - frame_offset',
+                    'fps': getattr(self.viewer3d, 'fps', loader.video_fps),
+                    'analyzed_frames': sorted(self.pose_analyzer.processed_frames),
+                    'total_frames': loader.total_frames, 'manual_events': sorted(self._manual_events),
+                    'mer_confirmed': self.mer_locked, 'br_confirmed': self.release_locked}
+        metadata['event_detection'] = 'CS image heuristics (right-handed) / manual corrections; review timing'
+        if getattr(self.viewer3d, 'metric', False):
+            metadata.update(self.viewer3d.provenance())
+        fc = {'frame': self.foot_contact_frame, 'shoulder_hip_angle': self.image_drawer.keyframe_shoulder_hip_angle,
+              'stride_distance': self.image_drawer.keyframe_stride_distance}
+        mer = {'frame': self.max_shoulder_angle_frame, 'shoulder_angle': self.image_drawer.keyframe_shoulder_angle}
+        br = {'frame': self.wrist_speed_frame, 'wrist_speed': self.image_drawer.keyframe_wrist_speed,
+              'extension_distance': self.image_drawer.keyframe_extension_distance}
+        try:
+            self.viewer3d.save_to_json()
+            # Separate output avoids overwriting 2D poses with a different synchronization.
+            for estimator, camera_name in ((self.pose_estimater, loader.video_name), (self.pose_estimater_2, loader.video_name_2)):
+                atomic_json(Path(loader.folder_path) / f'{camera_name}_{self._active_method}_poses.json',
+                            {'Analysis': metadata, 'records': estimator.person_df.to_dict('records')})
+            atomic_json(Path(loader.folder_path) / f'{self._output_name}_analysis.json',
+                        {'Analysis': metadata, 'frames': self.pose_analyzer.analyze_info})
+            result = SimpleKeyframeLogger(loader.folder_path).save_keyframe_data(
+                fps=metadata['fps'], video_name=self._output_name, kneeUp_frame=self.preparation_frame,
+                fc_data=fc, mer_data=mer, br_data=br, analysis=metadata)
+            if result is None:
+                raise OSError('無法寫入關鍵幀 JSON')
+        except (OSError, ValueError, TypeError) as exc:
+            self.calibration_status.setText(f'儲存失敗，可按「儲存分析 JSON」重試：{exc}')
+            return
+        self._analysis_dirty = False
+        quality = ''
+        if getattr(self.viewer3d, 'metric', False):
+            accepted = sum(int(np.count_nonzero(q['valid'])) for q in self.viewer3d.quality.values())
+            total = len(self.viewer3d.quality) * 26
+            quality = f'通過重建品質的關節 {accepted}/{total}；'
+        self.calibration_status.setText(f'已儲存 {self._output_name}_*.json；' + quality + self._calibration_description)
         
     def initVar(self):
         self.is_play = False
@@ -266,9 +622,11 @@ class PoseVideoTabControl(QWidget):
     def initFrameSlider(self):
         """初始化影片滑桿和相關的標籤。"""
         total_frames = self.video_loader.total_frames
+        self.ui.frameSlider.blockSignals(True)
         self.ui.frameSlider.setMinimum(0)
         self.ui.frameSlider.setMaximum(total_frames - 1)
         self.ui.frameSlider.setValue(0)
+        self.ui.frameSlider.blockSignals(False)
         self.ui.frameNumLabel.setText(f'0/{total_frames - 1}')
 
     def initGraph(self):
@@ -289,6 +647,9 @@ class PoseVideoTabControl(QWidget):
         self.graph_plotter.updateGraph(0)
 
     def resetPhaseDetection(self):
+        self._phase_last_frame = -1
+        self._manual_events = set()
+        self._analysis_dirty = False
         self.ui.footContact_ptn.setDisabled(True)
         self.ui.maxER_ptn.setDisabled(True)
         self.ui.release_ptn.setDisabled(True)
@@ -471,13 +832,10 @@ class PoseVideoTabControl(QWidget):
         # 清空關鍵幀視圖
         if hasattr(self.ui, 'fcView') and self.ui.fcView.scene() is not None:
             self.ui.fcView.scene().clear()
-            self.ui.fcView.scene().deleteLater()
         if hasattr(self.ui, 'merView') and self.ui.merView.scene() is not None:
             self.ui.merView.scene().clear()
-            self.ui.merView.scene().deleteLater()
         if hasattr(self.ui, 'brView') and self.ui.brView.scene() is not None:
             self.ui.brView.scene().clear()
-            self.ui.brView.scene().deleteLater()
    
     def loadVideo(self, is_processed:bool = False, video_path:str = None, video_path_2:str = None):
         if self.is_play:
@@ -489,7 +847,8 @@ class PoseVideoTabControl(QWidget):
         
         self.is_processed = is_processed
         self.video_loader.loadVideo(video_path, video_path_2)
-        self.checkVideoLoad()
+        if not self.video_loader.video_name:
+            return
         self.ui.showSkeletonCheckBox.setChecked(False)
         self.keyframe_logger = SimpleKeyframeLogger(self.video_loader.folder_path)
 
@@ -507,16 +866,8 @@ class PoseVideoTabControl(QWidget):
         else:
             print("[3D] 此錄影沒有 BRandRapsodo.json，略過球離手畫面顯示")
 
-        layout = self.ui.vispy_widget.layout()
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-        self.applyCalibration(self.video_loader.folder_path)
-        self.viewer3d = Triangulate3DViewer(self.K_S, self.K_F, self.F)
-        self.viewer3d.setJsonPaths(self.video_loader.folder_path, self.video_loader.video_name)
-        layout.addWidget(self.viewer3d.get_canvas().native)
+        self._calibration_ready = False
+        self.checkVideoLoad()
 
     def applyCalibration(self, folder_path):
         """依錄影資料夾內的校正快照設定 K_F、K_S、F；沒有快照則用寫死的舊設備參數。"""
@@ -532,22 +883,39 @@ class PoseVideoTabControl(QWidget):
             analyzer.viewer3D.K_L, analyzer.viewer3D.K_R, analyzer.viewer3D.F = self.K_S, self.K_F, self.F
 
     def loadProcessedData(self):
-        json_loader = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name)
-        json_loader_2 = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name_2)
-        self.json_path, person_df = json_loader.load()
-        self.json_path2, person_df_2 = json_loader_2.load()
-        self.pose_estimater.setProcessedData(person_df)
-        self.pose_estimater_2.setProcessedData(person_df_2)
-        layout = self.ui.vispy_widget.layout()
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.setParent(None)
-        self.applyCalibration(self.video_loader.folder_path)
-        self.viewer3d = Triangulate3DViewer(self.K_S, self.K_F, self.F)
-        self.viewer3d.setJsonPaths(self.video_loader.folder_path, self.video_loader.video_name)
-        layout.addWidget(self.viewer3d.get_canvas().native)
+        import pandas as pd
+        loader = self.video_loader
+        folder = Path(loader.folder_path)
+        legacy_metadata = None
+        for name in (loader.video_name, loader.video_name_2):
+            data = read_optional_json(folder / f'{name}_BRandRapsodo.json', {})
+            if data.get('Analysis', {}).get('pose_frame_number_space') == 'playback_timeline':
+                legacy_metadata = {**data['Analysis'], 'video_name': data.get('video_name'),
+                                   'video_name_2': data.get('video_name_2')}
+                break
+        for index, (name, estimator) in enumerate(((loader.video_name, self.pose_estimater),
+                                                 (loader.video_name_2, self.pose_estimater_2))):
+            path = folder / f'{name}_{self.calibration_combo.currentData()}_poses.json'
+            saved = read_optional_json(path, None)
+            if isinstance(saved, dict) and 'records' in saved:
+                rows, metadata = saved['records'], saved.get('Analysis', {})
+            else:
+                path = folder / f'{name}.json'
+                rows, metadata = read_optional_json(path, []), legacy_metadata
+            if not isinstance(rows, list):
+                raise ValueError(f'Pose JSON must contain records: {path}')
+            df = pd.DataFrame(rows)
+            estimator.reset()
+            if df.empty:
+                continue
+            # Older records without timeline metadata are interpreted as source frames.
+            old_offset = int(metadata.get('frame_offset', 0)) if metadata and metadata.get('video_name_2') == name else 0
+            df['frame_number'] = df['frame_number'] - old_offset + (self.frame_offset if index else 0)
+            # Drop entries which were generated by the old loader's boundary clipping.
+            source_frame = df.frame_number - (self.frame_offset if index else 0)
+            count = len(loader.video_frames_2 if index else loader.video_frames)
+            df = df[df.frame_number.between(0, loader.total_frames - 1) & source_frame.between(0, count - 1)]
+            estimator.setProcessedData(df.reset_index(drop=True))
 
     def checkVideoLoad(self):
         """檢查影片是否讀取完成，並更新 UI 元素。"""
@@ -560,11 +928,16 @@ class PoseVideoTabControl(QWidget):
             QTimer.singleShot(100, self.checkVideoLoad)  # 每100ms 檢查一次
             return
         # 影片讀取完成後更新 UI 元素
+        if not self.video_loader.total_frames:
+            return
         self.updateVideoInfo()
 
     def updateVideoInfo(self):
         """更新與影片相關的資訊顯示在 UI 上。"""
         self.reset()
+        self._calibration_ready = False
+        self.frame_offset = self.offset_spin.value()
+        self.video_loader.frame_offset = self.frame_offset
         self.initFrameSlider()
         self.initGraph()
         self.updateFrame(0)
@@ -573,15 +946,14 @@ class PoseVideoTabControl(QWidget):
         self.ui.videoNameLabel_3.setText(f"{self.video_loader.video_name_2}")
         video_size = self.video_loader.video_size
         self.ui.ResolutionLabel.setText(f"(0,0) - {video_size[0]} x {video_size[1]}")
-        if self.is_processed:
-            self.loadProcessedData()
-        else:
-            self.ui.startCodeBtn.setEnabled(True)
+        self.ui.startCodeBtn.setEnabled(True)
         # 設置幀偏移（補償相機延遲）并同步到 3D 查看器
-        self.setFrameOffset(-2)
+        self._apply_selected_calibration()
+        if self.is_processed and self._calibration_ready:
+            self._restore_keyframe_results()
 
     def showImage(self, image: np.ndarray, scene: QGraphicsScene, GraphicsView: QGraphicsView,
-                  draw_marker: bool = True, defer_refit: bool = True, process_events: bool = True): 
+                  draw_marker: bool = True, defer_refit: bool = True, process_events: bool = False):
         scene.clear()
         # 處理 None 圖像的情況（視頻加載過程中可能發生）
         if image is None:
@@ -653,7 +1025,7 @@ class PoseVideoTabControl(QWidget):
         
         for speed_name in speed_names:
             _, value = self.pose_analyzer.get_frame_angleOrSpeed_data(frame_num, speed_name=speed_name)
-            frame_data[speed_name] = value if value is not None else 0.0
+            frame_data[speed_name] = float(value) if np.isscalar(value) and value is not None else float('nan')
         
         return frame_data
     
@@ -669,53 +1041,53 @@ class PoseVideoTabControl(QWidget):
         # self.ui.shoulder_label.setText(f'{frame_data["shoulder_angle"]}°')
         # self.ui.wrist_label.setText(f'{frame_data["wrist_speed"]:.2f}(m/s)')
 
-    def _display_keyframe_with_text(self, frame_num: int, view_widget: QGraphicsView, keyframe_type: str, frame_data: dict = None):
-        """顯示關鍵幀影像並同步更新 UI 文字資訊"""
-        # 獲取圖像並繪製骨骼信息
-        image, _ = self.video_loader.getVideoImage(frame_num)
-        drawed_img = self.image_drawer.drawInfo(image, frame_num, self.pose_estimater.kpt_buffer)
-        
-        # 如果指定了 keyframe_type，繪製相應的分析信息
-        if keyframe_type is not None:
-            drawed_img = self.image_drawer.drawAngleInfo(image, frame_num, keyframe_type=keyframe_type, start_frame=self.preparation_frame)
-        
-        # 先更新文字造成的 layout 變化，再做關鍵幀 fit，避免先放大後縮小
-        temp_scene = QGraphicsScene()
-        self.showImage(drawed_img, temp_scene, view_widget, draw_marker=False, defer_refit=False, process_events=False)
-
-    def _update_keyframe_label(self, frame_num: int, keyframe_type: str):
-        """更新關鍵幀的UI標籤（無論是否有對應的圖視圖）
-        
-        Args:
-            frame_num: 關鍵幀幀號
-            keyframe_type: 關鍵幀類型 ('foot_contact', 'max_shoulder_er', 'release')
-        """
-        # 先提取數據
+    def _display_keyframe_with_text(self, frame_num, view_widget, keyframe_type, frame_data=None):
+        if frame_num is None or not 0 <= frame_num < (self.video_loader.total_frames or 0):
+            return
         image, _ = self.video_loader.getVideoImage(frame_num)
         if image is None:
             return
-        
-        # 調用 drawAngleInfo 來提取分析數據
-        self.image_drawer.drawAngleInfo(image, frame_num, keyframe_type=keyframe_type, start_frame=self.preparation_frame)
-        
-        # 根據類型更新對應的 label
+        drawed_img = image.copy()
+        try:
+            drawed_img = self.image_drawer.drawAngleInfo(image.copy(), frame_num,
+                keyframe_type=keyframe_type, start_frame=self.preparation_frame or 0)
+        except Exception as exc:
+            print(f'[3D replay] overlay unavailable: {exc}')
+        scene = view_widget.scene()
+        if scene is None:
+            scene = QGraphicsScene(view_widget)
+        else:
+            scene.setParent(view_widget)
+        self.showImage(drawed_img, scene, view_widget, draw_marker=False,
+                       defer_refit=False, process_events=False)
+        scene.setSceneRect(scene.itemsBoundingRect())
+        view_widget.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def _update_keyframe_label(self, frame_num, keyframe_type):
+        def value(name):
+            _, result = self.pose_analyzer.get_frame_angleOrSpeed_data(frame_num, speed_name=name)
+            return float(result) if np.isscalar(result) and result is not None and np.isfinite(result) else None
+        def formatted(number, factor=1):
+            return f'{number * factor:.1f}' if number is not None and np.isfinite(number) else '--'
         if keyframe_type == 'foot_contact':
-            shoulder_hip_angle = self.image_drawer.keyframe_shoulder_hip_angle
-            stride_distance = self.image_drawer.keyframe_stride_distance
-            if shoulder_hip_angle is not None and stride_distance is not None:
-                self.ui.FC_label.setText(f"{shoulder_hip_angle:.1f}\n{stride_distance*100:.1f}")
-                self.ui.FC_label_unit.setText("°\ncm")
+            angle = value('shoulder_hiple_angle')
+            distance = self.image_drawer._calculate_stride_distance(frame_num)
+            self.image_drawer.keyframe_shoulder_hip_angle = angle
+            self.image_drawer.keyframe_stride_distance = distance
+            self.ui.FC_label.setText(formatted(angle) + '\n' + formatted(distance, 100))
+            self.ui.FC_label_unit.setText('deg\ncm')
         elif keyframe_type == 'max_shoulder_er':
-            shoulder_angle = self.image_drawer.keyframe_shoulder_angle
-            if shoulder_angle is not None:
-                self.ui.MER_label_3.setText(f"{shoulder_angle:.1f}")
-                self.ui.MER_label_unit.setText("°")
+            angle = value('shoulder_angle')
+            self.image_drawer.keyframe_shoulder_angle = angle
+            self.ui.MER_label_3.setText(formatted(angle))
+            self.ui.MER_label_unit.setText('deg')
         elif keyframe_type == 'release':
-            wrist_speed = self.image_drawer.keyframe_wrist_speed
-            extension_distance = self.image_drawer.keyframe_extension_distance
-            if wrist_speed is not None and extension_distance is not None:
-                self.ui.BR_label_3.setText(f"{wrist_speed:.1f}\n{extension_distance*100:.1f}")
-                self.ui.BR_label_unit.setText("m/s\ncm")
+            speed = value('wrist_speed')
+            distance = self.image_drawer._calculate_extension_distance(frame_num)
+            self.image_drawer.keyframe_wrist_speed = speed
+            self.image_drawer.keyframe_extension_distance = distance
+            self.ui.BR_label_3.setText(formatted(speed) + '\n' + formatted(distance, 100))
+            self.ui.BR_label_unit.setText('m/s\ncm')
 
     def _detect_preparation_phase(self, frame_num: int) -> bool:
         """檢測準備階段
@@ -728,7 +1100,7 @@ class PoseVideoTabControl(QWidget):
             return False
         
         person_data = self.pose_estimater.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         left_knee_y = keypoints[13][1]  # 13: left knee
@@ -799,7 +1171,7 @@ class PoseVideoTabControl(QWidget):
             
             # 如果有 fcView，則額外顯示關鍵幀圖像
             if hasattr(self.ui, 'fcView'):
-                QTimer.singleShot(100, lambda: self._display_keyframe_with_text(frame_num, self.ui.fcView, keyframe_type='foot_contact', frame_data=frame_data))
+                self._display_keyframe_with_text(frame_num, self.ui.fcView, keyframe_type='foot_contact', frame_data=frame_data)
             return True
         return False
     
@@ -821,7 +1193,7 @@ class PoseVideoTabControl(QWidget):
         
         shoulder_angle = frame_data["shoulder_angle"]
         person_data = self.pose_estimater_2.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         wrist_conf = keypoints[10][2]  # 10: right wrist confidence
@@ -842,7 +1214,7 @@ class PoseVideoTabControl(QWidget):
             
             # 如果有 merView，則額外顯示關鍵幀圖像
             if hasattr(self.ui, 'merView'):
-                QTimer.singleShot(100, lambda: self._display_keyframe_with_text(self.max_shoulder_angle_frame, self.ui.merView, keyframe_type='max_shoulder_er', frame_data=frame_data))
+                self._display_keyframe_with_text(self.max_shoulder_angle_frame, self.ui.merView, keyframe_type='max_shoulder_er', frame_data=frame_data)
             return True
         return False
     
@@ -898,7 +1270,7 @@ class PoseVideoTabControl(QWidget):
             
             # 如果有 brView，則額外顯示關鍵幀圖像
             if hasattr(self.ui, 'brView'):
-                QTimer.singleShot(100, lambda: self._display_keyframe_with_text(self.wrist_speed_frame, self.ui.brView, keyframe_type='release', frame_data=frame_data))
+                self._display_keyframe_with_text(self.wrist_speed_frame, self.ui.brView, keyframe_type='release', frame_data=frame_data)
             return True
         return False
     
@@ -932,7 +1304,8 @@ class PoseVideoTabControl(QWidget):
         
         # 更新 Slider 顏色覆蓋層
         if self.overlay is None:
-            self.overlay = SliderColorOverlay(self.ui.frameSlider, segments, segment_half_thickness=9)
+            self.overlay = SliderColorOverlay(self.ui.frameSlider, segments, segment_half_thickness=9,
+                                              fps=getattr(self.viewer3d, 'fps', self.video_loader.video_fps))
         else:
             self.overlay.updateSegments(segments)
         
@@ -992,11 +1365,16 @@ class PoseVideoTabControl(QWidget):
         """Internal method to play the next frame"""
         if not self.is_play or self._current_play_frame >= self.video_loader.total_frames:
             self._play_timer.stop()
+            if self._current_play_frame >= self.video_loader.total_frames:
+                self._complete_video_analysis()
             if self.is_play:
                 self.playBtnClicked()  # Auto-pause at end
             return
         
-        self.ui.frameSlider.setValue(self._current_play_frame)
+        if self.ui.frameSlider.value() == self._current_play_frame:
+            self.analyzeFrame()
+        else:
+            self.ui.frameSlider.setValue(self._current_play_frame)
         self._current_play_frame += 1
 
     def phaseDetection(self, frame_num: int):
@@ -1008,6 +1386,13 @@ class PoseVideoTabControl(QWidget):
         3. 依序檢測各個投球階段
         4. 更新視覺化元素（輔助線、顏色區段）
         """
+        if frame_num <= self._phase_last_frame:
+            return
+        self._phase_last_frame = frame_num
+        if getattr(self.viewer3d, 'metric', False):
+            self._calibrated_phase_detection(frame_num)
+            self._update_phase_visualization()
+            return
         # 1. 獲取分析數據
         frame_data = self._get_frame_analysis_data(frame_num)
         
@@ -1037,6 +1422,8 @@ class PoseVideoTabControl(QWidget):
             self.graph_plotter.updateGraph(frame_num)
 
     def analyzeFrame(self):
+        if not self.video_loader.total_frames or self.video_loader.is_loading:
+            return
         fps = 0
         frame_num = self.ui.frameSlider.value()
         video_fps = float(getattr(self.video_loader, 'video_fps', 0) or 0)
@@ -1062,7 +1449,7 @@ class PoseVideoTabControl(QWidget):
         t2 = time.time()
         # self.ui.FPSInfoLabel.setText(f"{fps:02d}")
         t3 = time.time()
-        if self.viewer3d:
+        if self.viewer3d and self._calibration_ready and self._valid_stereo_frame(frame_num):
         # 取得2D骨架資料，考慮幀偏移以補償相機延遲
             person_df_L = self.pose_estimater.getPersonDf(frame_num=frame_num)
             # 應用幀偏移：frame_num - frame_offset 使 camera_R 與 camera_L 對齐
@@ -1071,7 +1458,7 @@ class PoseVideoTabControl(QWidget):
             person_df_R = self.pose_estimater_2.getPersonDf(frame_num=frame_num)
             # person_df_R = self.pose_estimater_2.getPersonDf(frame_num=frame_num)
             # print(f"L:{person_df_L}, R:{person_df_R}")
-            if not person_df_L.empty and not person_df_R.empty:
+            if person_df_L is not None and person_df_R is not None and len(person_df_L) == 1 and len(person_df_R) == 1:
                 # 取第一個人的 keypoints
                 frame_L = {"keypoints": person_df_L.iloc[0]["keypoints"]}
                 frame_R = {"keypoints": person_df_R.iloc[0]["keypoints"]}
@@ -1085,49 +1472,24 @@ class PoseVideoTabControl(QWidget):
                 #     else:
                 #         self.table.setItem(i, 3, QTableWidgetItem("N/A"))
                 self.pose_analyzer.addAnalyzeInfo(frame_num, frame_L, frame_R)
+                self._analysis_dirty = True
                 
                 # 執行階段檢測（包括已處理影片，因為關鍵帧信息未保存）
-                self.phaseDetection(frame_num)
+                if not getattr(self.viewer3d, 'metric', False):
+                    self.phaseDetection(frame_num)
+        if self._calibration_ready and getattr(self.viewer3d, 'metric', False):
+            self.phaseDetection(frame_num)
         t4 = time.time()
 
         if frame_num == self.video_loader.total_frames - 1:
-            # 🚩 確保在影片結束時存下最後一段 3D 座標
-            if self.viewer3d:
-                self.viewer3d.save_to_json()
+            self._complete_video_analysis()
 
-            if not self.is_processed and self.ui.showSkeletonCheckBox.isChecked():
-                self.video_loader.saveVideo(self.video_loader.folder_path)
-            fc_data = {
-                "frame": self.foot_contact_frame,
-                "shoulder_hip_angle": self.image_drawer.keyframe_shoulder_hip_angle,
-                "stride_distance": self.image_drawer.keyframe_stride_distance
-            }
-            mer_data = {
-                "frame": self.max_shoulder_angle_frame,
-                "shoulder_angle": self.image_drawer.keyframe_shoulder_angle
-            }
-            br_data = {
-                "frame": self.wrist_speed_frame,
-                "wrist_speed": self.image_drawer.keyframe_wrist_speed,
-                "extension_distance": self.image_drawer.keyframe_extension_distance
-            }
-            
-            self.keyframe_logger.save_keyframe_data(
-            fps=video_fps,
-            video_name=self.video_loader.video_name,
-            pitcher_id="Pitcher01", # 您需要一個方法來設置投手ID
-            pitch_no=1,            # 您需要一個方法來設置投球編號
-            kneeUp_frame=self.preparation_frame,
-            fc_data=fc_data,
-            mer_data=mer_data,
-            br_data=br_data
-        )
-        
-        # 使用已獲取的 frame 來更新顯示
         self._updateFrame(frame, frame_2, frame_num)
 
     def _updateFrame(self, frame, frame_2, frame_num: int):
         """內部更新幀顯示，直接使用已獲取的圖像數據"""
+        if getattr(self.viewer3d, 'metric', False):
+            self.viewer3d.set_frame(frame_num)  # Clear the skeleton when this frame has no valid reconstruction.
         drawed_img = self.image_drawer.drawInfo(frame, frame_num, self.pose_estimater.kpt_buffer)
         drawed_img_2 = self.image_drawer_2.drawInfo(frame_2, frame_num, self.pose_estimater_2.kpt_buffer)
         
@@ -1160,11 +1522,33 @@ class PoseVideoTabControl(QWidget):
             element.setVisible(visible)
 
     def toggleDetect(self):
+        if not self.video_loader.total_frames:
+            return
+        if not self._calibration_ready and not self._apply_selected_calibration():
+            return
+        self.is_play = False
+        if hasattr(self, '_play_timer'):
+            self._play_timer.stop()
+        manual = {attr: getattr(self, attr) for attr in self._manual_events}
+        self.resetPhaseDetection()
+        for attr, value in manual.items():
+            setattr(self, attr, value)
+        self._manual_events = set(manual)
+        self.mer_locked = 'max_shoulder_angle_frame' in manual
+        self.release_locked = 'wrist_speed_frame' in manual
+        self.pose_analyzer.reset()
+        self.pose_analyzer_2.reset()
+        if self.is_processed:
+            self.loadProcessedData()
+        else:
+            self.pose_estimater.reset()
+            self.pose_estimater_2.reset()
         self.ui.showSkeletonCheckBox.setChecked(True)
-        frame, frame_2 = self.video_loader.getVideoImage(0)
-        _, _, _= self.pose_estimater.detectKpt(frame, 0, is_video=True)
-        _, _, _= self.pose_estimater_2.detectKpt(frame_2, 0, is_video=True)
-        self.ui.playBtn.click()
+        self.toggleShowSkeleton(2)
+        self.ui.frameSlider.blockSignals(True)
+        self.ui.frameSlider.setValue(0)
+        self.ui.frameSlider.blockSignals(False)
+        self.playBtnClicked()
 
     def toggleSelect(self, state:int):
         if not self.ui.showSkeletonCheckBox.isChecked():
@@ -1241,6 +1625,9 @@ class PoseVideoTabControl(QWidget):
                    
         例如：如果 video_path 比 video_path_2 快 2 幀，設置 offset=-2
         """
+        if hasattr(self, 'offset_spin') and self.offset_spin.value() != offset:
+            self.offset_spin.setValue(offset)
+            return
         self.frame_offset = offset
         self.video_loader.frame_offset = offset
 

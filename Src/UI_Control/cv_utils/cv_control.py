@@ -10,6 +10,7 @@ from cv_utils.cv_thread import VideoCaptureThread, VideoWriterThread, VideoToIma
 from PyQt5.QtWidgets import *
 from collections import deque
 import time
+from cv_utils.analysis_io import save_pose_records
 
 
 def normalize_fps(fps, default=30.0, min_fps=1.0, max_fps=2000.0) -> float:
@@ -308,6 +309,9 @@ class VideoLoader:
         return self.video_frames[safe_idx_1].copy(), self.video_frames_2[safe_idx_2].copy()
     
     def saveVideo(self, output_folder:str = None):
+        output_folder = output_folder or self.folder_path
+        if not output_folder:
+            raise ValueError("No video output folder is available")
         os.makedirs(output_folder, exist_ok=True)
 
         json_path = os.path.join(output_folder, f"{self.video_name}.json")
@@ -317,8 +321,11 @@ class VideoLoader:
         save_person_df_2 = self.image_drawer_2.pose_estimater.person_df.copy()
 
         # 🚩 直接儲存完整的 person_df，其中包含 keypoints (原始) 舆 smoothed_keypoints (平滑)
-        save_person_df.to_json(json_path, orient='records')
-        save_person_df_2.to_json(json_path_2, orient='records')
+        if os.path.normcase(os.path.abspath(json_path)) != os.path.normcase(os.path.abspath(json_path_2)):
+            save_pose_records(json_path, save_person_df.to_dict(orient='records'))
+        # Single-video analysis uses the same path twice; the side-view estimator
+        # owns the complete analysis and must be the sole writer in that case.
+        save_pose_records(json_path_2, save_person_df_2.to_dict(orient='records'))
 
         # save_location = os.path.join(output_folder, f"{self.video_name}_Sk26.mp4")
         # save_location_2 = os.path.join(output_folder, f"{self.video_name_2}_Sk26.mp4")

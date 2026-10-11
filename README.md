@@ -127,6 +127,23 @@ python main.py
 
 新架設或移動相機後需要重新校正，結果自動存到 `Db\Calibration\`，錄影時會把當下的校正值一起存進該筆錄影資料夾。
 
+建議使用新的整合入口（在專案根目錄執行）：
+
+```powershell
+conda activate Pitcher
+python .\Src\UI_Control\calibrate.py
+```
+
+按「開始校正」後，在同一視窗依序完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。棋盤格每台至少擷取 15 組，校正桿至少 4 組，左右每張依相同球心順序標註 6 點。仍需人工移動校正板／桿及標註球心，不需另開 `main.py`、`01`、`02`。
+
+已校正內參且鏡頭、焦距及影像尺寸／裁切未變時，可勾選「沿用這兩台已有內參」。外參照片也可匯入包含 `cf`、`cs` 的資料夾，兩邊檔名必須相同。完整通過後才更新目前校正檔；每次的原始照片、點位、內參樣本、誤差報告與被取代檔案的備份保存在 `Db\Calibration\sessions\<時間>_wand\`，供之後與棋盤格外參方法比較。這版先實作校正桿方法。
+
+**8 顆粉紅球十字架的自動 HSV／PnP 外參**：執行 `python Src/UI_Control/calibrate.py --cross`。預設讀取 `intrinsic_20261008` 與 `Calibrate_Picture_Auto`，使用正面 SN24380115、側面 SN21055356，輸出毫米制外參、球號標註與品質報告到新的 `Db/Calibration/cross_pnp/<時間>/`。此功能不覆蓋現行 F 校正；世界座標、拍攝建議、量測限制與本批外參和現場位置的差異見 [CROSS_CALIBRATION.md](docs/CROSS_CALIBRATION.md)。
+
+**只提取螢光粉球**：執行 `python Src/UI_Control/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 [FLUORESCENT_BALL_EXTRACTION.md](docs/FLUORESCENT_BALL_EXTRACTION.md)。
+
+新入口以程式位置解析路徑，可從任意工作目錄啟動。舊有分步工具仍可使用：
+
 ```
 cd Src\UI_Control
 python calib.py                  # 1. 每台相機的內參，並指定正面／側面

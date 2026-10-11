@@ -1,6 +1,14 @@
 import sys
 import os
-os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.path.join(os.environ["CONDA_PREFIX"], "Library", "plugins", "platforms")
+
+# ``CONDA_PREFIX`` is not guaranteed to be set when this file is launched
+# directly from VS Code or with an explicit Python executable.  ``sys.prefix``
+# still points at the active conda environment in those cases.
+conda_prefix = os.environ.get("CONDA_PREFIX", sys.prefix)
+os.environ.setdefault("CONDA_PREFIX", conda_prefix)
+qt_plugin_path = os.path.join(conda_prefix, "Library", "plugins", "platforms")
+if os.path.isdir(qt_plugin_path):
+    os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_plugin_path
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout
 
 # vispy 必須在 PySpin 等第三方 DLL 被載入前鎖定 Qt 後端，
@@ -34,6 +42,9 @@ class Main(QMainWindow):
         self.ui.Two_d_Tab.addTab(self.video_compare_tab, "回放比較")    
 
 if __name__ == '__main__':
+    # Model configs, fonts and recordings use paths relative to this directory.
+    # Support launching `python Src/UI_Control/main.py` from the project root.
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     app = QApplication(sys.argv)
     main_window = Main()
     main_window.show()

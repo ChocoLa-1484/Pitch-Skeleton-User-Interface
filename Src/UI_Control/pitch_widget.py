@@ -21,6 +21,7 @@ from utils.model import Model
 from PitchingAnalyzer import PitchingAnalyzer
 from cv_utils.cv_thread import FramesToVideoWriterThread
 from cv_utils import calib_store
+from cv_utils.analysis_io import atomic_json, read_optional_json
 from capture_tablet_images import TabletImageCaptureThread
 import cv2
 import json
@@ -416,22 +417,13 @@ class PosePitchTabControl(QWidget):
             self.ui.ResolutionLabel.setText(f"{self._resolution_base_text}{perf_text}")
 
     def setFrameOffset(self, offset: int):
-        """
-        設置幀偏移以同步兩個視頻
-        
-        Args:
-            offset: 幀偏移值
-                   負值表示 video_path_2 延遲（需要向前讀取視頻_2 的幀）
-                   正值表示 video_path 延遲（需要向前讀取視頻_1 的幀）
-                   
-        例如：如果 video_path 比 video_path_2 快 2 幀，設置 offset=-2
-        """
+        """第二部影片的原始幀 = 回放幀 - offset（與 VideoLoader 一致）。"""
         self.frame_offset = offset
         self.video_loader.frame_offset = offset
 
         # 更新當前幀顯示
         current_frame = self.ui.frameSlider.value()
-        print(f"✓ 幀偏移已設置為: {offset} (負值: video_path_2 延遲，正值: video_path 延遲)")
+        print(f"✓ 幀偏移已設置為: {offset}；第二部影片幀 = 回放幀 - offset")
 
     def initVideoVar(self):
         self.is_play = False
@@ -439,6 +431,9 @@ class PosePitchTabControl(QWidget):
         self.play_times = 1
         self.is_auto_recorded_video = False  # 標記是否為自動錄影產生的影片
         self._video_end_pending = False
+        self._analysis_dirty = False
+        self._analysis_finalized = False
+        self._video_generation = 0
         # 階段檢測相關變量
         self.preparation_frame = None
         self.min_left_knee_y = np.inf
@@ -502,6 +497,13 @@ class PosePitchTabControl(QWidget):
             if hasattr(self.ui, 'brView') and self.ui.brView.scene() is not None:
                 self._display_keyframe_image(self.wrist_speed_frame, self.ui.brView, keyframe_type='release')
         super().resizeEvent(event)  
+        # Child layouts receive their final sizes after this resize event.
+        QTimer.singleShot(0, self._refit_video_views)
+
+    def _refit_video_views(self):
+        for view in (self.ui.FrameView, self.ui.FrameView_2, self.ui.fcView, self.ui.merView, self.ui.brView):
+            if view.scene() is not None and view.scene().items():
+                view.fitInView(view.scene().sceneRect(), Qt.KeepAspectRatio)
 
     def bindUI(self):
         """Bind UI element to their corresponding functions."""
@@ -546,6 +548,14 @@ class PosePitchTabControl(QWidget):
         self.ui.slowMotionInput.currentIndexChanged.connect(self.updatePlaybackRate)
         self.ui.playBtn.clicked.connect(self.playBtnClicked)
         self.ui.playBtn.setFocusPolicy(Qt.NoFocus)
+        self.reanalyze_button = QPushButton("重新分析", self)
+        self.reanalyze_button.setToolTip("保留已載入骨架，重新偵測關鍵幀；播放完畢自動儲存 JSON。")
+        self.reanalyze_button.clicked.connect(self.restart_video_analysis)
+        self.save_analysis_button = QPushButton("儲存 JSON", self)
+        self.save_analysis_button.setToolTip("儲存目前已分析的骨架與關鍵幀；不必等待自動錄影流程。")
+        self.save_analysis_button.clicked.connect(self.save_current_analysis)
+        self.ui.horizontalLayout_4.insertWidget(3, self.reanalyze_button)
+        self.ui.horizontalLayout_4.insertWidget(4, self.save_analysis_button)
         self.ui.backKeyBtn.clicked.connect(
             lambda: self.ui.frameSlider.setValue(self.ui.frameSlider.value() - 1)
         )
@@ -618,6 +628,8 @@ class PosePitchTabControl(QWidget):
                 print(f"[Exposure] 設定 {value} µs 失敗：{e}")
 
     def playBtnClicked(self):
+        if self.single_video_scan_running:
+            return
         if self.video_loader.video_name == "" or self.video_loader.video_name_2 == "":
             QMessageBox.warning(self, "無法播放影片", "請讀取影片!")
             return
@@ -639,7 +651,11 @@ class PosePitchTabControl(QWidget):
                 self._play_timer.stop()
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.KeyPress:
+        # Application-wide filters also see typing in other tabs and dialogs.
+        focus = QApplication.focusWidget()
+        editing = isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox))
+        if (event.type() == QEvent.KeyPress and self.isVisible()
+                and QApplication.activeWindow() == self.window() and not editing):
             handler = self._global_key_handlers.get(event.key())
             if handler is not None:
                 handler()
@@ -666,11 +682,14 @@ class PosePitchTabControl(QWidget):
         if not self.is_play or total_frames <= 0 or self._current_play_frame >= total_frames:
             if hasattr(self, "_play_timer"):
                 self._play_timer.stop()
-            if self.is_play:
+            if self.is_play and not self._video_end_pending:
                 self.playBtnClicked()
             return
 
-        self.ui.frameSlider.setValue(self._current_play_frame)
+        if self.ui.frameSlider.value() == self._current_play_frame:
+            self.analyzeFrame()  # setValue(0) emits nothing when already at 0.
+        else:
+            self.ui.frameSlider.setValue(self._current_play_frame)
         self._current_play_frame += 1
 
     def _get_play_interval_ms(self) -> int:
@@ -692,6 +711,7 @@ class PosePitchTabControl(QWidget):
             self.ui.frameSlider,
             self.ui.frameNumLabel
         ]
+        elements.extend([self.reanalyze_button, self.save_analysis_button])
         
         for element in elements:
             element.setVisible(visible)
@@ -1150,15 +1170,20 @@ class PosePitchTabControl(QWidget):
 
     def toggleSkeletonVideo(self, state:int):
         if state==2:
-            self.updateVideoInfo()
-            if self.single_video_mode:
+            # Loading a video initializes state once. Replaying/enabling the
+            # checkbox must not reload/reset MER, BR or recursively start play.
+            self.pose_estimater.setDetect(True)
+            self.pose_estimater_2.setDetect(True)
+            self.image_drawer.setShowSkeleton(True)
+            self.image_drawer_2.setShowSkeleton(True)
+            self.ui.showSkeletonCheckBox.blockSignals(True)
+            self.ui.showSkeletonCheckBox.setCheckState(2)
+            self.ui.showSkeletonCheckBox.blockSignals(False)
+            if self.single_video_mode and self.pose_estimater_2.person_df.empty:
                 self.scan_single_video_keyframes()
-            else:
-                self.initAnalyzeFrame()
-            # self.groupBox(False)
         else:
-            self.reset()
-            # self.groupBox(True)
+            self.pose_estimater.setDetect(False)
+            self.pose_estimater_2.setDetect(False)
 
     def toggleShowBbox(self, state:int):
         """Toggle bounding box visibility."""
@@ -1203,7 +1228,7 @@ class PosePitchTabControl(QWidget):
         if "右肩外旋" in angle_data:
             frame_data['right_shoulder_external_rotation_angle'] = angle_data["右肩外旋"][0]
         else:
-            frame_data['right_shoulder_external_rotation_angle'] = 0.0
+            frame_data['right_shoulder_external_rotation_angle'] = float('nan')
 
         landed_data = row['left_ankle_landed'].iloc[0]
         frame_data['left_ankle_landed'] = landed_data
@@ -1232,11 +1257,22 @@ class PosePitchTabControl(QWidget):
                 - 'release': 釋放點幀
                 - None: 不繪製分析信息
         """
+        if (frame_num is None or not isinstance(frame_num, (int, np.integer))
+                or not 0 <= frame_num < int(self.video_loader.total_frames or 0)):
+            return False
         _ , frame_2 = self.video_loader.getVideoImage(frame_num)
+        if frame_2 is None or frame_2.size == 0:
+            return False
+        drawed_img = frame_2.copy()
         
         # 如果指定了 keyframe_type，繪製相應的分析信息
         if keyframe_type is not None and hasattr(self.image_drawer_2, 'drawAngleInfo'):
-            drawed_img = self.image_drawer_2.drawAngleInfo(frame_2, frame_num, keyframe_type=keyframe_type, start_frame= self.preparation_frame if self.preparation_frame is not None else 1)
+            try:
+                overlay = self.image_drawer_2.drawAngleInfo(frame_2.copy(), frame_num, keyframe_type=keyframe_type, start_frame=self.preparation_frame if self.preparation_frame is not None else 0)
+                if overlay is not None and overlay.size:
+                    drawed_img = overlay
+            except Exception as exc:
+                print(f"[Keyframe] Overlay failed at {frame_num}; showing original frame: {exc}")
         
         # 轉換為 QPixmap
         drawed_img = np.ascontiguousarray(drawed_img)
@@ -1254,15 +1290,26 @@ class PosePitchTabControl(QWidget):
             label_widget.setAlignment(Qt.AlignCenter)
         elif isinstance(label_widget, QGraphicsView):
             # 使用 QGraphicsScene 显示
-            scene = QGraphicsScene()
+            scene = label_widget.scene()
+            if scene is None:
+                scene = QGraphicsScene(label_widget)
+                label_widget.setScene(scene)
+            else:
+                scene.clear()
             scene.addPixmap(pixmap)
-            label_widget.setScene(scene)
+            scene.setSceneRect(pixmap.rect().x(), pixmap.rect().y(), pixmap.width(), pixmap.height())
             label_widget.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+        return True
 
     def display_roi_from_json(self, json_path, label_widget: QLabel, text_label: QLabel = None, direction_widget: SpinDirectionWidget = None):
         # 1. 讀取 JSON 檔案
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        try:
+            data = read_optional_json(json_path)
+        except (OSError, ValueError) as exc:
+            print(f"[Replay] Cannot read optional ROI JSON: {exc}")
+            return False
+        if not isinstance(data, dict):
+            return False
         
         # 2. 取得 Base64 字串 (假設我們要看 roi_frame_1)
         base64_str = data.get("roi_frame_1")
@@ -1270,7 +1317,7 @@ class PosePitchTabControl(QWidget):
         base64_str_3 = data.get("roi_frame_3")
         if not base64_str or not base64_str_2:
             print("找不到影像數據")
-            return
+            return False
 
         # 3. 將 Base64 解碼回二進位 Bytes
         img_bytes = base64.b64decode(base64_str)
@@ -1377,7 +1424,7 @@ class PosePitchTabControl(QWidget):
             return False
         
         person_data = self.pose_estimater_2.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         left_knee_y = keypoints[13][1]  # 13: left knee
@@ -1432,7 +1479,7 @@ class PosePitchTabControl(QWidget):
             return False
         
         person_data = self.pose_estimater_2.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         left_ankle_x = keypoints[15][0] # 15: left ankle
@@ -1477,7 +1524,7 @@ class PosePitchTabControl(QWidget):
             return False
         
         person_data = self.pose_estimater_2.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         left_shoulder_x = keypoints[5][0] # 5: left shoulder
@@ -1486,6 +1533,8 @@ class PosePitchTabControl(QWidget):
         
         # 新版：使用右肩外旋角度
         right_shoulder_external_rotation_angle = frame_data["right_shoulder_external_rotation_angle"]
+        if not np.isfinite(right_shoulder_external_rotation_angle):
+            return False
         
         if right_shoulder_external_rotation_angle > self.max_shoulder_angle_value:
             self.max_shoulder_angle_value = right_shoulder_external_rotation_angle
@@ -1519,7 +1568,7 @@ class PosePitchTabControl(QWidget):
             return False
         
         person_data = self.pose_estimater_2.getPersonDf(frame_num=frame_num, is_select=True)
-        if person_data is None:
+        if person_data is None or person_data.empty:
             return False
         keypoints = person_data['keypoints'].iloc[0]
         right_wrist_x = keypoints[10][0] # 10: right wrist
@@ -1557,8 +1606,15 @@ class PosePitchTabControl(QWidget):
         1. 獲取當前幀的分析數據
         2. 依序檢測各個投球階段
    """
+        # Seeking/replaying an already analyzed frame must not advance the
+        # preparation/MER/release state machine a second time.
+        if frame_num <= getattr(self, '_last_phase_frame', -1):
+            return
+        self._last_phase_frame = frame_num
         # 1. 獲取分析數據
         frame_data = self._get_frame_analysis_data(frame_num)
+        if not frame_data:
+            return
         
         # 階段 1：尋找準備動作 (抬腳)
         if self.preparation_frame is None:
@@ -1628,6 +1684,7 @@ class PosePitchTabControl(QWidget):
         self.max_wrist_speed_after_er = -np.inf
         self.mer_locked = False
         self.release_locked = False
+        self._last_phase_frame = -1
         # 清除分析數據緩存
         if hasattr(self, '_analysis_data_cache'):
             self._analysis_data_cache.clear()
@@ -1657,12 +1714,19 @@ class PosePitchTabControl(QWidget):
             frame, frame_2 = self.video_loader.getVideoImage(frame_num)
             if self.ui.skeletonVideoCheckBox.isChecked():
                 t_detect = time.perf_counter()
+                # Retain the front-view baseline formerly obtained by
+                # initAnalyzeFrame, without recursively reloading the video.
+                if frame_num == 0 and 0 not in self.pose_estimater.processed_frames:
+                    self.pose_estimater.detectKpt(frame, 0, is_video=True)
                 _, _, fps = self.pose_estimater_2.detectKpt(frame_2, frame_num, is_video=True)
                 detect_ms = (time.perf_counter() - t_detect) * 1000.0
                 # 只對主視角（側面）進行分析
                 person_df_L = self.pose_estimater_2.getPersonDf(frame_num=frame_num)
                 if person_df_L is not None and not person_df_L.empty:
                     t_analyze = time.perf_counter()
+                    if frame_num not in self.pose_analyzer_2.processed_frames:
+                        self._analysis_dirty = True
+                        self._analysis_finalized = False
                     self.pose_analyzer_2.addAnalyzeInfo(frame_num)
                     # 執行階段檢測
                     self.phaseDetection(frame_num)
@@ -1674,13 +1738,19 @@ class PosePitchTabControl(QWidget):
             total_ms = (time.perf_counter() - total_start) * 1000.0
             # self._update_perf_status(detect_ms, analyze_ms, draw_ms, total_ms, fps=fps)
             
-            if self.is_play and frame_num == self.video_loader.total_frames - 1 and not self._video_end_pending and self.is_auto_recorded_video:
+            if (self.is_play and frame_num == self.video_loader.total_frames - 1
+                    and not self._video_end_pending and not self._analysis_finalized and self.is_auto_recorded_video):
                 self.stopTabletCapture()
                 self._video_end_pending = True
                 if self.timer is not None and self.timer.isActive():
                     self.timer.stop()
-                QTimer.singleShot(self._get_video_end_delay_ms(), self._finishVideoEnd)
+                if hasattr(self, '_play_timer'):
+                    self._play_timer.stop()
+                generation = self._video_generation
+                QTimer.singleShot(self._get_video_end_delay_ms(), lambda: self._finishVideoEnd(generation))
             elif frame_num == self.video_loader.total_frames - 1:
+                if not self.is_auto_recorded_video and self.ui.skeletonVideoCheckBox.isChecked():
+                    self._complete_video_analysis()
                 if not self.show_br_points:
                     self.ui.showBR_checkBox.setCheckState(2)
         else:
@@ -1715,8 +1785,8 @@ class PosePitchTabControl(QWidget):
                         self.stopAutoRecording()
                         print(f"自動錄影結束，已錄製 {total_frames} 幀")
 
-    def _finishVideoEnd(self):
-        if not self._video_end_pending:
+    def _finishVideoEnd(self, generation=None):
+        if not self._video_end_pending or (generation is not None and generation != self._video_generation):
             return
         self._video_end_pending = False
         self.handleVideoEnd()
@@ -1740,11 +1810,8 @@ class PosePitchTabControl(QWidget):
     
     def handleVideoEnd(self):
         """Handle the logic when video reaches its end."""
-        if self.is_auto_recorded_video:
-            self.exportReleasePointJson()
+        self._complete_video_analysis()
         self.play_times -= 1
-        if self.play_times == 0 and self.ui.skeletonVideoCheckBox.isChecked() and not self.play2videos:
-            self.video_loader.saveVideo(self.output_dir)
 
         if self.play_times > 0:
             # Replay the video
@@ -1768,13 +1835,102 @@ class PosePitchTabControl(QWidget):
 
             # print(self.play_times)
 
+    @staticmethod
+    def _metric_text(value):
+        try:
+            return f"{float(value):.1f}" if np.isfinite(float(value)) else "N/A"
+        except (ValueError, TypeError):
+            return "N/A"
+
+    def _render_keyframe_results(self):
+        """Render all known events, including a release within the final 7 frames."""
+        events = ((self.foot_contact_frame, self.ui.fcView, 'foot_contact', self.ui.footContact_ptn),
+                  (self.max_shoulder_angle_frame, self.ui.merView, 'max_shoulder_er', self.ui.maxER_ptn),
+                  (self.wrist_speed_frame, self.ui.brView, 'release', self.ui.release_ptn))
+        for frame, view, kind, button in events:
+            shown = self._display_keyframe_image(frame, view, kind)
+            button.setEnabled(shown)
+            if not shown and view.scene() is not None:
+                view.scene().clear()
+        mer_data = self._get_frame_analysis_data(self.max_shoulder_angle_frame) if self.max_shoulder_angle_frame is not None else {}
+        br_data = self._get_frame_analysis_data(self.wrist_speed_frame) if self.wrist_speed_frame is not None else {}
+        angle = mer_data.get('right_shoulder_external_rotation_angle', float('nan'))
+        speed = br_data.get('wrist_speed_2d', float('nan'))
+        if np.isfinite(angle):
+            self.max_shoulder_angle_value = angle
+        if np.isfinite(speed):
+            self.max_wrist_speed_after_er = speed / 100.
+        self.ui.FC_label.setText("\n" + self._metric_text(self.image_drawer_2.stride_distance))
+        self.ui.FC_label_unit.setText("\ncm")
+        self.ui.MER_label.setText(self._metric_text(self.max_shoulder_angle_value) + "\n")
+        self.ui.MER_label_unit.setText("°\n")
+        self.ui.BR_label.setText(self._metric_text(self.max_wrist_speed_after_er) + "\n" +
+                                 self._metric_text(self.image_drawer_2.extension_distance))
+        self.ui.BR_label_unit.setText("m/s\ncm")
+        self.release_view_rendered = self.wrist_speed_frame is not None
+        self._refresh_keyframe_labels()
+
+    def _complete_video_analysis(self):
+        if self._analysis_finalized and not self._analysis_dirty:
+            return True
+        self._render_keyframe_results()
+        try:
+            export_dir = self.output_dir or self.video_loader.folder_path
+            self.video_loader.saveVideo(export_dir)
+            path = self.exportReleasePointJson()
+            self._analysis_dirty = False
+            self._analysis_finalized = True
+            self.ui.RecordStatelabel.setText("分析 JSON 已儲存")
+            self.ui.RecordStatelabel.setToolTip(path)
+            return True
+        except Exception as exc:
+            # Keep dirty state so retrying playback/export can recover after a
+            # full disk or temporary permission failure.
+            self.ui.RecordStatelabel.setText("JSON 儲存失敗")
+            self.ui.RecordStatelabel.setToolTip(str(exc))
+            print(f"[Analysis export] {exc}")
+            return False
+
+    def save_current_analysis(self):
+        if self.single_video_scan_running:
+            return False
+        if not self.is_video or not self.video_loader.total_frames:
+            self.ui.RecordStatelabel.setText("請先載入並分析影片")
+            return False
+        self._analysis_finalized = False
+        return self._complete_video_analysis()
+
+    def restart_video_analysis(self):
+        if self.single_video_scan_running or not self.is_video or not self.video_loader.total_frames:
+            return
+        if hasattr(self, '_play_timer'):
+            self._play_timer.stop()
+        self.is_play = False
+        self._video_end_pending = False
+        self._video_generation += 1
+        self.resetPhaseDetection()
+        for analyzer in (self.pose_analyzer, self.pose_analyzer_2):
+            analyzer.reset()
+        for drawer in (self.image_drawer, self.image_drawer_2):
+            drawer.reset()
+        self._analysis_dirty = True
+        self._analysis_finalized = False
+        self.ui.skeletonVideoCheckBox.blockSignals(True)
+        self.ui.skeletonVideoCheckBox.setChecked(True)
+        self.ui.skeletonVideoCheckBox.blockSignals(False)
+        self.toggleSkeletonVideo(2)
+        self._render_keyframe_results()
+        self.ui.frameSlider.blockSignals(True)
+        self.ui.frameSlider.setValue(0)
+        self.ui.frameSlider.blockSignals(False)
+        self.ui.RecordStatelabel.setText("重新分析中…")
+        self.playBtnClicked()
+
     def exportReleasePointJson(self):
         """匯出球釋放點、ROI 影像與 OCR metrics 到 JSON。"""
-        has_saved_roi = bool(self.tablet_capture_latest_roi_frames_save)
-        # if not self.br_points and not has_saved_roi and not self.tablet_capture_latest_metrics:
-        #     return
-
-        export_dir = self.output_dir or "../../Db/Record/TabletCapture"
+        export_dir = self.output_dir or self.video_loader.folder_path
+        if not export_dir or not self.video_loader.video_name:
+            raise ValueError("尚未載入影片，不能匯出分析 JSON。")
         os.makedirs(export_dir, exist_ok=True)
 
         def encode_image_to_base64(image):
@@ -1784,13 +1940,6 @@ class PosePitchTabControl(QWidget):
             if not success:
                 return None
             return base64.b64encode(buffer.tobytes()).decode('ascii')
-
-        def json_default(value):
-            if isinstance(value, np.ndarray):
-                return value.tolist()
-            if isinstance(value, np.generic):
-                return value.item()
-            return str(value)
 
         latest_point = self.br_points[-1] if self.br_points else None
         if latest_point is not None and len(latest_point) >= 2:
@@ -1819,6 +1968,16 @@ class PosePitchTabControl(QWidget):
             "roi_frame_3": roi_frame_3,
             "ball_center": ball_center,
             "metrics": self.tablet_capture_latest_metrics,
+            "Analysis": {
+                "schema": "pitch_2d_analysis_v1",
+                "pose_frame_number_space": "playback_timeline",
+                "frame_offset": self.video_loader.frame_offset,
+                "frame_mapping": "video1 = frame_number; video2 = clip(frame_number - frame_offset)",
+                "video_fps": self.video_loader.video_fps,
+                "video_total_frames": self.video_loader.total_frames,
+                "analyzed_frame_count": len(self.pose_analyzer_2.processed_frames),
+                "distance_method": "legacy_pixel_scale_0.224_cm_per_px_not_chessboard_calibrated",
+            },
             "Keyframes": {
                 "preparation_frame": self.preparation_frame,
                 "FC": {
@@ -1827,10 +1986,12 @@ class PosePitchTabControl(QWidget):
                 },
                 "MER": {
                     "frame": self.max_shoulder_angle_frame,
+                    "confirmed": self.mer_locked,
                     "shoulder_angle": self.max_shoulder_angle_value if self.max_shoulder_angle_value != -np.inf else None
                 },
                 "BR": {
                     "frame": self.wrist_speed_frame,
+                    "confirmed": self.release_locked,
                     "wrist_speed": self.max_wrist_speed_after_er if self.max_wrist_speed_after_er != -np.inf else None,
                     "extension_distance": self.image_drawer_2.extension_distance if hasattr(self.image_drawer_2, 'extension_distance') else None
                 }
@@ -1838,12 +1999,17 @@ class PosePitchTabControl(QWidget):
         }
 
         json_path = os.path.join(export_dir, f"{self.video_loader.video_name}_BRandRapsodo.json")
-        try:
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2, default=json_default)
-            print(f"[ReleasePoint] JSON saved: {json_path}")
-        except Exception as e:
-            print(f"[ReleasePoint] JSON export failed: {e}")
+        previous = read_optional_json(json_path, {})
+        if not isinstance(previous, dict):
+            raise ValueError(f"Existing event JSON is not an object: {json_path}")
+        # Offline analysis has no new tablet capture. Preserve saved ROI/OCR and
+        # other metadata instead of replacing them with null.
+        for field in ('wrist_point', 'roi_frame_1', 'roi_frame_2', 'roi_frame_3', 'ball_center', 'metrics'):
+            if payload[field] is None:
+                payload[field] = previous.get(field)
+        atomic_json(json_path, {**previous, **payload})
+        print(f"[ReleasePoint] JSON saved: {json_path}")
+        return json_path
 
     def pitherAnaylze(self):
         """使用 PitchingAnalyzer 分析投球動作"""
@@ -2005,6 +2171,8 @@ class PosePitchTabControl(QWidget):
     def play_video_from_item(self):
         """從 Tree 中選擇一個影片資料夾（或兩部影片）並播放"""
         import gc
+        if self.single_video_scan_running:
+            return
 
         selected_tree_items = self.tree.selectedItems()
         if not selected_tree_items:
@@ -2055,6 +2223,13 @@ class PosePitchTabControl(QWidget):
         else:
             video_paths = []
 
+        # Analysis uses the second camera as the side view, independently of
+        # the order in which two tree items were selected.
+        if len(video_paths) == 2:
+            by_prefix = {os.path.basename(p)[:3].upper(): p for p in video_paths}
+            if set(by_prefix) == {"CF_", "CS_"}:
+                video_paths = [by_prefix["CF_"], by_prefix["CS_"]]
+
         self.single_video_mode = len(video_paths) == 1
         if self.single_video_mode:
             self.frame_offset = 0
@@ -2067,6 +2242,11 @@ class PosePitchTabControl(QWidget):
             self.is_video = True
             video_path1, video_path2 = video_paths
             self.output_dir = os.path.dirname(video_path1) 
+            self.play2videos = not self.single_video_mode
+            self.is_auto_recorded_video = False
+            self.tablet_capture_latest_roi_frames_save = {}
+            self.tablet_capture_latest_metrics = None
+            self.ball_center_live = []
             
             # 清理舊數據
             self.video_loader.reset()
@@ -2080,8 +2260,6 @@ class PosePitchTabControl(QWidget):
             self.video_loader.loadVideo(video_path1, video_path2)
             self.checkVideoLoad()
             # self.init3DViewer()
-            self.play2videos = not self.single_video_mode
-            self.is_auto_recorded_video = False  # 標記為從資料夾讀取的影片
             rapsodo_json_path = os.path.join(self.video_loader.folder_path, f"{os.path.splitext(os.path.basename(video_path1))[0]}_BRandRapsodo.json")
             self.display_roi_from_json(rapsodo_json_path, self.ui.RoiLabel, self.ui.RapsodoDataLabel, self.spin_direction_widget)
 
@@ -2199,7 +2377,6 @@ class PosePitchTabControl(QWidget):
         self.image_drawer_2.pose_analyzer = self.pose_analyzer_2
 
         self.initFrameSlider()
-        self.updateFrame(frame_num=0)
         self.model.setImageSize(self.video_loader.video_size)
         video_size = self.video_loader.video_size
         self._set_resolution_text(f"(0,0) - {video_size[0]} x {video_size[1]}, 影片FPS: {video_fps}")
@@ -2208,8 +2385,10 @@ class PosePitchTabControl(QWidget):
         self.ui.StateLabel.setStyleSheet("color: white; background-color: blue; font-weight: bold;")
         # 以確定性流程啟動播放：先停止舊播放，再啟動新播放
         self.setFrameOffset(self.frame_offset)
+        restored = self._load_saved_analysis()
+        self.updateFrame(frame_num=0)
         self._refresh_keyframe_labels()
-        if self.single_video_mode:
+        if self.single_video_mode and not restored:
             self.ui.StateLabel.setText("單影片分析模式")
             self.ui.StateLabel.setStyleSheet("color: white; background-color: #2c7be5; font-weight: bold;")
             QTimer.singleShot(0, self.scan_single_video_keyframes)
@@ -2218,13 +2397,76 @@ class PosePitchTabControl(QWidget):
             self.playBtnClicked()
         self.playBtnClicked()
 
+    def _load_saved_analysis(self):
+        """Restore keyframes even when tablet ROI/OCR images are absent."""
+        folder = self.video_loader.folder_path
+        event_path = os.path.join(folder, f"{self.video_loader.video_name}_BRandRapsodo.json")
+        try:
+            data = read_optional_json(event_path, {})
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError) as exc:
+            print(f"[Replay] Ignoring invalid event JSON: {exc}")
+            data = {}
+        analysis = data.get('Analysis', {})
+        offset = analysis.get('frame_offset') if isinstance(analysis, dict) else None
+        if isinstance(offset, int) and not isinstance(offset, bool) and not self.single_video_mode:
+            self.setFrameOffset(offset)
+        for name, estimator, analyzer in (
+                (self.video_loader.video_name, self.pose_estimater, self.pose_analyzer),
+                (self.video_loader.video_name_2, self.pose_estimater_2, self.pose_analyzer_2)):
+            try:
+                rows = read_optional_json(os.path.join(folder, name + '.json'), [])
+                if not isinstance(rows, list) or not rows:
+                    continue
+                df = pd.DataFrame(rows)
+                if not {'frame_number', 'keypoints', 'person_id'} <= set(df.columns):
+                    continue
+                df = df[(df.frame_number >= 0) & (df.frame_number < self.video_loader.total_frames)].reset_index(drop=True)
+                estimator.setProcessedData(df)
+                for frame in sorted(estimator.processed_frames):
+                    analyzer.addAnalyzeInfo(int(frame))
+            except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+                print(f"[Replay] Cannot restore {name} skeleton: {exc}")
+        events = data.get('Keyframes')
+        if not isinstance(events, dict):
+            return False
+
+        def valid_frame(value):
+            return value if (isinstance(value, int) and not isinstance(value, bool)
+                             and 0 <= value < self.video_loader.total_frames) else None
+
+        def finite_value(value):
+            try:
+                return float(value) if value is not None and np.isfinite(float(value)) else -np.inf
+            except (ValueError, TypeError):
+                return -np.inf
+
+        fc, mer, br = (events.get(k) if isinstance(events.get(k), dict) else {} for k in ('FC', 'MER', 'BR'))
+        self.preparation_frame = valid_frame(events.get('preparation_frame'))
+        self.foot_contact_frame = valid_frame(fc.get('frame'))
+        self.max_shoulder_angle_frame = valid_frame(mer.get('frame'))
+        self.wrist_speed_frame = valid_frame(br.get('frame'))
+        self.max_shoulder_angle_value = finite_value(mer.get('shoulder_angle'))
+        self.max_wrist_speed_after_er = finite_value(br.get('wrist_speed'))
+        self.mer_locked = self.max_shoulder_angle_frame is not None and mer.get('confirmed', True)
+        self.release_locked = self.wrist_speed_frame is not None and br.get('confirmed', True)
+        self.image_drawer_2.stride_distance = fc.get('stride_distance')
+        self.image_drawer_2.extension_distance = br.get('extension_distance')
+        restored = any(f is not None for f in (self.foot_contact_frame, self.max_shoulder_angle_frame, self.wrist_speed_frame))
+        if restored:
+            self._render_keyframe_results()
+            self._last_phase_frame = self.video_loader.total_frames - 1
+            self._analysis_finalized = True
+        return restored
+
     def _refresh_keyframe_labels(self):
         if hasattr(self.ui, 'footContact_label'):
             self.ui.footContact_label.setText(f"第{self.foot_contact_frame}幀" if self.foot_contact_frame is not None else "未找到")
         if hasattr(self.ui, 'maxER_label'):
-            self.ui.maxER_label.setText(f"第{self.max_shoulder_angle_frame}幀" if self.max_shoulder_angle_frame is not None else "未找到")
+            self.ui.maxER_label.setText((f"第{self.max_shoulder_angle_frame}幀" + ("（候選）" if not self.mer_locked else "")) if self.max_shoulder_angle_frame is not None else "未找到")
         if hasattr(self.ui, 'release_label'):
-            self.ui.release_label.setText(f"第{self.wrist_speed_frame}幀" if self.wrist_speed_frame is not None else "未找到")
+            self.ui.release_label.setText((f"第{self.wrist_speed_frame}幀" + ("（候選）" if not self.release_locked else "")) if self.wrist_speed_frame is not None else "未找到")
 
     def _mirror_single_video_analysis(self):
         self.pose_estimater.person_df = self.pose_estimater_2.person_df.copy()
@@ -2246,6 +2488,7 @@ class PosePitchTabControl(QWidget):
             return
 
         self.single_video_scan_running = True
+        self.tree.setEnabled(False)
         self.ui.frameSlider.setEnabled(False)
         self.ui.playBtn.setEnabled(False)
         self.ui.StateLabel.setText("單影片分析中...")
@@ -2283,6 +2526,7 @@ class PosePitchTabControl(QWidget):
                 self.pose_estimater_2.detectKpt(frame, frame_num, is_video=True)
                 person_df = self.pose_estimater_2.getPersonDf(frame_num=frame_num)
                 if person_df is not None and not person_df.empty:
+                    self._analysis_dirty = True
                     self.pose_analyzer_2.addAnalyzeInfo(frame_num)
                     self.phaseDetection(frame_num)
 
@@ -2298,6 +2542,7 @@ class PosePitchTabControl(QWidget):
                 "wrist_speed_frame": self.wrist_speed_frame,
             }
             self._refresh_keyframe_labels()
+            self._complete_video_analysis()
             self.ui.StateLabel.setText("單影片分析完成")
             self.ui.StateLabel.setStyleSheet("color: white; background-color: #1f9d55; font-weight: bold;")
             self.updateFrame(frame_num=self.ui.frameSlider.value())
@@ -2306,6 +2551,7 @@ class PosePitchTabControl(QWidget):
             print(f"[single video scan] {e}")
         finally:
             self.single_video_scan_running = False
+            self.tree.setEnabled(True)
             self.ui.frameSlider.setEnabled(True)
             self.ui.playBtn.setEnabled(True)
 
@@ -2322,14 +2568,18 @@ class PosePitchTabControl(QWidget):
     def initFrameSlider(self):
         """初始化影片滑桿和相關的標籤。"""
         total_frames = self.video_loader.total_frames
+        self.ui.frameSlider.blockSignals(True)
         self.ui.frameSlider.setMinimum(0)
         self.ui.frameSlider.setMaximum(total_frames - 1)
         self.ui.frameSlider.setValue(0)
+        self.ui.frameSlider.blockSignals(False)
         self.ui.frameNumLabel.setText(f'0/{total_frames - 1}')
 
     def resetFrameSlider(self):
+        self.ui.frameSlider.blockSignals(True)
         self.ui.frameSlider.setValue(0)
         self.ui.frameSlider.setRange(0, 0)
+        self.ui.frameSlider.blockSignals(False)
         self.ui.frameNumLabel.setText(f'0/0')
         self.ui.RecordStatelabel.setText(" ")
         if hasattr(self.ui, 'FC_label'):
@@ -2341,10 +2591,17 @@ class PosePitchTabControl(QWidget):
 
     def reset(self):
         import gc        
+        if hasattr(self, '_play_timer'):
+            self._play_timer.stop()
+        self.is_play = False
+        self.ui.playBtn.setText("▶︎")
         # 清理分析数据缓存
         if hasattr(self, '_analysis_data_cache'):
             self._analysis_data_cache.clear()
         self._video_end_pending = False
+        self._video_generation = getattr(self, '_video_generation', 0) + 1
+        self._analysis_dirty = False
+        self._analysis_finalized = False
 
         self._perf_ema_ms = {'detect': 0.0, 'analyze': 0.0, 'draw': 0.0, 'total': 0.0}
         self._perf_sample_count = 0
@@ -2367,13 +2624,10 @@ class PosePitchTabControl(QWidget):
         # 清空關鍵幀視圖
         if hasattr(self.ui, 'fcView') and self.ui.fcView.scene() is not None:
             self.ui.fcView.scene().clear()
-            self.ui.fcView.scene().deleteLater()
         if hasattr(self.ui, 'merView') and self.ui.merView.scene() is not None:
             self.ui.merView.scene().clear()
-            self.ui.merView.scene().deleteLater()
         if hasattr(self.ui, 'brView') and self.ui.brView.scene() is not None:
             self.ui.brView.scene().clear()
-            self.ui.brView.scene().deleteLater()
         
         # 重置投球分析器
         self.pitching_analyzer.reset()
@@ -2430,6 +2684,7 @@ class PosePitchTabControl(QWidget):
         pixmap = QPixmap.fromImage(qImg)
         
         scene.addPixmap(pixmap)
+        scene.setSceneRect(0, 0, w, h)
         GraphicsView.setScene(scene)
         GraphicsView.setAlignment(Qt.AlignLeft)
         GraphicsView.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
