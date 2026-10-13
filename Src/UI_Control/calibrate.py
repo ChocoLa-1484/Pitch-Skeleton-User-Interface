@@ -479,6 +479,7 @@ class CalibrationWindow(QMainWindow):
         self.panel.log_area.setMaximumHeight(120)
         self.panel.cmb_camera.parentWidget().hide()
         self.panel.cmb_front.parentWidget().hide()
+        self.panel.photo_group.hide()
         self.panel.btn_calibrate.hide()
         self.panel.spn_cols.setValue(self.cols.value())
         self.panel.spn_rows.setValue(self.rows.value())

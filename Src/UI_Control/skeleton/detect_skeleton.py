@@ -13,6 +13,7 @@ from mmpose.apis import init_model as init_pose_estimator
 from mmpose.evaluation.functional import nms
 from mmpose.structures import merge_data_samples
 from utils.timer import FPSTimer
+from .pitcher_target import PitcherTargetSelector
 import torch
 import torch.autograd.profiler as profiler
 
@@ -28,6 +29,7 @@ except (ImportError, ModuleNotFoundError):
 class PoseEstimater:
     def __init__(self, model: Model =None):
         self.model = model
+        self.pitcher_target = PitcherTargetSelector()
         self.img_shape = (0,0,0)
         self.person_df = pd.DataFrame()
         self.pre_person_df = pd.DataFrame()
@@ -134,9 +136,17 @@ class PoseEstimater:
         }
 
     def mergePersonData(self, pred_instances, person_ids: list, frame_num: int = None):
-        person_bboxes = pred_instances['bboxes']
         if frame_num is None:
             self.person_data = []
+
+        if pred_instances is None or not person_ids:
+            # Preserve video history but leave this frame empty. In live mode,
+            # clear the previous pose so a missing pitcher is not still drawn.
+            if frame_num is not None:
+                self.person_df_by_frame[int(frame_num)] = pd.DataFrame()
+            return pd.DataFrame(self.person_data)
+
+        person_bboxes = pred_instances['bboxes']
 
         for person, pid, bbox in zip(pred_instances, person_ids, person_bboxes):
             keypoints_data = np.hstack((
@@ -257,7 +267,7 @@ class PoseEstimater:
         Args:
             model (dict): 包含檢測器、姿態估計器和跟蹤器的模型。
             img (np.ndarray): 輸入的圖像。
-            select_id (int, optional): 選擇指定的追蹤ID，如果為None，則處理所有目標。
+            select_id (int, optional): 保留舊呼叫介面；投手固定使用邏輯 ID 1。
 
         Returns:
             Tuple: 預測的姿態實例和在線的追蹤ID。
@@ -272,25 +282,13 @@ class PoseEstimater:
         bboxes = det_result.bboxes[det_result.labels == self.model.detect_args.det_cat_id]
         scores = det_result.scores[det_result.labels == self.model.detect_args.det_cat_id]
         bboxes = bboxes[nms(np.hstack((bboxes, scores[:, None])), self.model.detect_args.nms_thr), :4]
-        # 將新偵測的邊界框更新到跟蹤器
-        online_targets = []
-        track_id = 1  # 手动编号 track_id
-
-        for bbox in bboxes:
-            x1, y1, x2, y2 = bbox  # bbox 是 [x1, y1, x2, y2]
-            w = x2 - x1
-            h = y2 - y1
-            tlwh = [x1, y1, w, h]  # 转换为 tlwh 格式
-
-            online_targets.append({
-                'tlwh': tlwh,   # 原本 tracker 提供的 tlwh
-                'track_id': track_id  # 人工分配 track_id
-            })
-            track_id += 1  # 递增 ID
-
-        # 過濾出有效的邊界框和追蹤ID
-        # online_bbox, online_ids = self.filterValidTargets(online_targets, select_id)
-        online_bbox, online_ids = self.filterBiggestTargets(online_targets, select_id)
+        # Detection indices are not persistent identities. Lock one central
+        # pitcher by geometry and always expose the same logical person ID.
+        online_bbox = self.pitcher_target.select(bboxes, img.shape)
+        if not online_bbox:
+            # MMPose treats an empty bbox list as the entire image.
+            return None, []
+        online_ids = [1]
 
         # 姿態估計
         pose_results = inference_topdown(self.model.pose_estimator, img, np.array(online_bbox))
@@ -511,6 +509,7 @@ class PoseEstimater:
         self.kpt_buffer = []
 
     def reset(self):
+        self.pitcher_target.reset()
         self.person_df = pd.DataFrame()
         self.pre_person_df = pd.DataFrame()
         self.person_id = None

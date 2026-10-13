@@ -66,6 +66,10 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 以下為原本仍保留的分步工具流程：
 
+**`calib.py` 直接使用棋盤格照片（2026-10-13）**：不必連接相機。在第 2 區填好內角點寬／高與每格邊長（mm），於「從照片校正」填入照片所屬相機的序號，再按「讀取照片資料夾」。每次選單台相機的資料夾，例如 `cf` 或 `cs`，不會遞迴混入其他相機照片。支援 JPG、JPEG、PNG、BMP、TIFF 與中文路徑；無角點、尺寸不符、壞檔及與前一張有效照片幾乎相同的影像會略過並記錄原因。載入成功會取代原樣本，取消或整批失敗則保留原樣本。
+
+確認有效照片至少 10 張（建議 15–20 張、不同位置與傾斜角）後，按「執行校正」。結果沿用既有品質檢查，存至 `Db/Calibration/intrinsic/intrinsics_all.json` 與 `calib_SN<序號>.npz`，另記錄實際採用的照片路徑。同一序號會更新其校正結果。兩台相機請分別載入與計算；改棋盤格規格後需重新讀取照片。整合精靈 `calibrate.py` 仍沿用原本的即時取樣流程。
+
 | 步驟 | 執行 | 要接什麼 | 產出 |
 |---|---|---|---|
 | 1. 內參（每台各做一次） | `python calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
@@ -169,6 +173,8 @@ python Src/UI_Control/measure_stride_pnp.py --pose-annotations --reference-frame
 ### 算法
 
 內參用 `findChessboardCornersSB` 偵測 49 點，各相機獨立校正。預設等距抽樣最多 60 個有效視角，依每張重投影 RMS 排除明顯異常；k3 固定 0，其餘徑向／切向係數和 fx、fy、cx、cy 估計。輸出逐張 RMS、內參標準差、覆蓋率、失敗名單和角點預覽。
+
+2026-10-13 修正 SB 旗標傳法：明確傳入 `flags=CALIB_CB_NORMALIZE_IMAGE`，失敗時加 `CALIB_CB_EXHAUSTIVE` 重試；兩次皆失敗才列入失敗名單。成功視角的 `detector`／`detection_flags` 記錄實際方法與旗標。第一次套用修正時請不要加 `--reuse-detections`，否則會沿用舊角點與漏偵測結果；如需保留原校正，請以 `--output` 指定新的輸出資料夾。
 
 PnP 路徑對每對棋盤求兩個 `solvePnP` 位姿，利用固定相機幾何的一致性，解決方形棋盤的八種角點編號方向；再以 `stereoCalibrate(CALIB_FIX_INTRINSIC)` 聯合精修共同雙目位姿。棋盤 100 mm 物件座標直接提供尺度。
 
