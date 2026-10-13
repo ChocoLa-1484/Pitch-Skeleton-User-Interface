@@ -12,6 +12,12 @@
 
 **更新時間**：2026-10-13
 
+**【SB 偵測失敗原因查證（2026-10-13）】**
+- 使用者詢問 SB 精度與大量照片偵測不到的原因；本輪做診斷，未改偵測程式或重算／覆寫內參。
+- 根因見 P1-010：`chessboard_metric.detect_folder` 把旗標放在 SB 的第三個位置參數（corners），應明確傳 `flags=`。
+- Pitcher 環境（本次 OpenCV 回報 5.0.0）實測 `Calibrate_Picture_Chessboard` 各 87 張：目前寫法 CF 80／CS 8；改用 `flags=CALIB_CB_NORMALIZE_IMAGE` 測試 CF 87／CS 85；傳統方法加 adaptive/normalize 均 87。角點成功率不代表已驗證內參／3D 精度。
+- 剩餘 CS 第 8、12 張用明確 `flags=CALIB_CB_NORMALIZE_IMAGE | CALIB_CB_EXHAUSTIVE` 均成功；因此正規化加失敗重試可找回本批全部照片。下一步若實作修正，改明確旗標及重試策略，保存所用偵測方法；勿直接覆寫現用內參。
+
 **【calib.py 從照片計算內參（2026-10-13）】**
 - 使用者確認需求是讀取資料夾的棋盤格照片，再計算內參；不是載入既有 JSON／NPZ。
 - 已加入單台照片資料夾匯入與相機序號欄位，沿用現有角點精修、品質評估及儲存流程。中文路徑可讀，尺寸不符／無角點／相鄰重複照片略過，取消或整批無效保留原樣本，成功才取代。即時相機與照片不可混用；改棋盤格規格後必須重取樣。
@@ -284,6 +290,13 @@
 - **影響範圍**：使用主線 `PoseEstimater` 的即時與離線新骨架推論；已存 JSON 不受影響。
 - **修正**：`pitcher_target.py` 起始只接受框中心 x=25–75%、y=15–85% 的人物，距畫面中心最近者優先；框面積至少全圖 0.5%、高度至少 10%。鎖定後以位移、IoU、面積變化配對，不再依排列編號或每幀最大框選人，允許跨步離開起始區。漏偵測輸出空結果，連續 15 幀後解除鎖定、下一幀再由中央取得目標；不推論舊框。只輸出一人，邏輯 ID 固定 1。
 - **限制**：空間配對不是外觀辨識；兩人高度重疊仍可能混淆，低信心關節與動作模糊也需另行評估。
+
+### [P1-010] SB 旗標誤傳到 corners 參數，造成大量棋盤格漏偵測
+
+- **登記日期**：2026-10-13
+- **狀態**：`OPEN`（根因及整批對照確認，尚未修改主程式）
+- **成因／影響**：`cv_utils/chessboard_metric.py` 的 `findChessboardCornersSB(gray, pattern, cv2.CALIB_CB_NORMALIZE_IMAGE)` 在目前 Python binding 中第三參數是輸出 corners，而非 flags，正規化未按預期啟用；影響 `calibrate_chessboard.py` 的照片篩選。`calib.py` 使用傳統角點偵測，不走此呼叫。
+- **驗證**：同一批 CF／CS 各 87 張，在暫存診斷腳本中改成明確 `flags=` 後，SB 成功數由 80／8 提升到 87／85；剩餘兩張加 EXHAUSTIVE 均成功。未更新原 detections.json、intrinsics.json。
 
 ### [P2-003] 自動錄影實際只有約 66～69 FPS，不是 179 FPS
 
