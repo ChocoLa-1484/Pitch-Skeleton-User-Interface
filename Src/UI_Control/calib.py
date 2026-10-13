@@ -11,10 +11,14 @@
 流程：下拉選單選相機 → 連接 → 確認棋盤格規格 → 擷取 10~15 組不同角度
       → 執行校正 → 自動存到 Db/Calibration/intrinsic/
       → 第 4 區指定正面/側面，寫入 Db/Calibration/camera_roles.json
+
+已有照片：填入相機序號及棋盤格規格 → 讀取照片資料夾 → 執行校正。
+每次選擇一台相機的資料夾，不需連接相機。
 """
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 
@@ -23,7 +27,7 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTextEdit,
                              QComboBox, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QMessageBox)
+                             QMessageBox, QFileDialog, QLineEdit, QProgressDialog)
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 
@@ -73,6 +77,8 @@ class CalibWindow(QMainWindow):
         self.imgpoints = []
         self.captured_count = 0
         self.image_size = None
+        self._sample_spec = None
+        self._photo_paths = []
 
         self._preview_tick = 0
         self._preview_found = False
@@ -133,6 +139,19 @@ class CalibWindow(QMainWindow):
         board_layout.addWidget(self.spn_square)
         board_layout.addStretch()
         layout.addWidget(board_group)
+
+        self.photo_group = QGroupBox("從照片校正（不需連接相機，每次選一台相機的資料夾）")
+        photo_layout = QHBoxLayout(self.photo_group)
+        self.txt_photo_sn = QLineEdit()
+        self.txt_photo_sn.setPlaceholderText("照片所屬的相機序號")
+        self.btn_import_photos = QPushButton("讀取照片資料夾")
+        self.btn_import_photos.clicked.connect(self.choose_photo_folder)
+        self.lbl_photo_source = QLabel("尚未載入照片")
+        photo_layout.addWidget(QLabel("相機序號："))
+        photo_layout.addWidget(self.txt_photo_sn)
+        photo_layout.addWidget(self.btn_import_photos)
+        photo_layout.addWidget(self.lbl_photo_source, 1)
+        layout.addWidget(self.photo_group)
 
         # 畫面
         self.lbl_view = QLabel("尚未連接相機")
@@ -304,6 +323,118 @@ class CalibWindow(QMainWindow):
 
     # ---------- 校正 ----------
 
+    def _board_spec(self):
+        return (self.spn_cols.value(), self.spn_rows.value(), self.spn_square.value())
+
+    @staticmethod
+    def _find_sample_corners(frame, pattern):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        found, corners = cv2.findChessboardCorners(gray, pattern, None)
+        if not found:
+            return None
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+        corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+        return np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2)
+
+    def choose_photo_folder(self):
+        if self.camera is not None:
+            self.log("請先中斷相機連接，再讀取照片資料夾。")
+            return
+        if not self.txt_photo_sn.text().strip():
+            self.log("請先填入照片所屬的相機序號。")
+            self.txt_photo_sn.setFocus()
+            return
+        folder = QFileDialog.getExistingDirectory(self, "選擇單台相機的棋盤格照片資料夾",
+                                                   calib_store.CALIB_DIR)
+        if folder:
+            self.load_photo_folder(folder, self.txt_photo_sn.text().strip())
+
+    def load_photo_folder(self, folder, serial_number):
+        """Stage a photo batch; cancellation/failure leaves existing samples intact."""
+        if self.camera is not None:
+            self.log("請先中斷相機連接，再讀取照片資料夾。")
+            return False
+        sn = str(serial_number).strip()
+        if not sn or not sn.isascii() or not sn.isalnum():
+            self.log("相機序號請使用英文字母或數字。")
+            return False
+        try:
+            files = sorted(p for p in Path(folder).iterdir()
+                           if p.is_file() and p.suffix.lower() in
+                           {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'})
+        except OSError as exc:
+            self.log(f"無法讀取照片資料夾：{exc}")
+            return False
+        if not files:
+            self.log("資料夾內沒有照片；請選擇含 JPG／PNG／BMP／TIFF 的單台相機資料夾。")
+            return False
+
+        spec = self._board_spec()
+        pattern, square = spec[:2], spec[2]
+        points, paths, size, preview = [], [], None, None
+        progress = QProgressDialog("正在讀取棋盤格照片…", "取消", 0, len(files), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        try:
+            for index, path in enumerate(files):
+                progress.setValue(index)
+                progress.setLabelText(f"偵測棋盤格 {index + 1}/{len(files)}：{path.name}")
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    self.log("已取消讀取，保留原有樣本。")
+                    return False
+                try:
+                    # imdecode/fromfile supports Chinese Windows paths.
+                    frame = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_COLOR)
+                    if frame is None:
+                        raise ValueError("無法解碼影像")
+                    current_size = (frame.shape[1], frame.shape[0])
+                    if size is not None and current_size != size:
+                        raise ValueError(f"影像尺寸 {current_size} 與本批 {size} 不同")
+                    corners = self._find_sample_corners(frame, pattern)
+                    if corners is None:
+                        raise ValueError("未完整偵測到棋盤格")
+                    if points:
+                        shift = np.mean(np.linalg.norm(
+                            corners.reshape(-1, 2) - points[-1].reshape(-1, 2), axis=1))
+                        if shift < self.DUPLICATE_SHIFT_PX:
+                            raise ValueError(f"與上一張有效照片幾乎相同（位移 {shift:.1f} px）")
+                    points.append(corners)
+                    paths.append(str(path.resolve()))
+                    size, preview = current_size, frame
+                except (OSError, ValueError, cv2.error) as exc:
+                    self.log(f"略過 {path.name}：{exc}")
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                self.log("已取消讀取，保留原有樣本。")
+                return False
+        finally:
+            progress.close()
+        if not points:
+            self.log("沒有可用的棋盤格照片，保留原有樣本；請確認內角點數量與照片。")
+            return False
+
+        objp = np.zeros((pattern[0] * pattern[1], 3), np.float32)
+        objp[:, :2] = np.mgrid[0:pattern[0], 0:pattern[1]].T.reshape(-1, 2) * square
+        self.objpoints = [objp.copy() for _ in points]
+        self.imgpoints = points
+        self.captured_count = len(points)
+        self.image_size = size
+        self.connected_sn = sn
+        self._sample_spec = spec
+        self._photo_paths = paths
+        self.last_frame = preview
+        self.txt_photo_sn.setText(sn)
+        self.lbl_photo_source.setText(f"SN{sn}｜{len(points)}/{len(files)} 張有效照片")
+        self.lbl_photo_source.setToolTip(str(Path(folder).resolve()))
+        display = preview.copy()
+        cv2.drawChessboardCorners(display, pattern, points[-1], True)
+        self.lbl_view.setPixmap(self.to_pixmap(display))
+        covered, _ = self._coverage()
+        self.log(f"已載入 SN{sn}：{len(points)}/{len(files)} 張有效照片，尺寸 {size}，"
+                 f"覆蓋 {covered}/9 區。已取代先前樣本；按「執行校正」計算內參。")
+        return True
+
     def capture_sample(self):
         if self.camera is None or self.last_frame is None:
             self.log("尚未連接相機或畫面未就緒。")
@@ -311,20 +442,17 @@ class CalibWindow(QMainWindow):
 
         pattern = (self.spn_cols.value(), self.spn_rows.value())
         square = self.spn_square.value()
-
-        gray = cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2GRAY)
-        found, corners = cv2.findChessboardCorners(gray, pattern, None)
-
-        if not found:
+        if self._sample_spec is not None and self._sample_spec != self._board_spec():
+            self.log("棋盤格規格已變更，請恢復原規格或清空樣本後重新擷取。")
+            return
+        size = (self.last_frame.shape[1], self.last_frame.shape[0])
+        if self.imgpoints and self.image_size != size:
+            self.log("影像尺寸與既有樣本不同，請清空樣本後重新擷取。")
+            return
+        corners = self._find_sample_corners(self.last_frame, pattern)
+        if corners is None:
             self.log("擷取失敗：未完整偵測到棋盤格。請調整角度/距離，確認整塊板子都在畫面內。")
             return
-
-        # 亞像素精修，提升角點定位精度
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-        corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-        # OpenCV bindings can return either (N, 2) or (N, 1, 2).
-        # Store one layout and compare matching points without broadcasting.
-        corners = np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2)
 
         # 板子沒移動就重複擷取，等於同一組資料算好幾次，會讓誤差假性偏低
         if self.imgpoints:
@@ -345,6 +473,8 @@ class CalibWindow(QMainWindow):
         self.objpoints.append(objp)
         self.imgpoints.append(corners)
         self.captured_count += 1
+        self.image_size = size
+        self._sample_spec = self._board_spec()
 
         covered, missing = self._coverage()
         msg = f"已擷取第 {self.captured_count} 組樣本｜畫面覆蓋 {covered}/9 區"
@@ -419,6 +549,9 @@ class CalibWindow(QMainWindow):
         return verdict, problems, bad
 
     def run_calibration(self):
+        if self._sample_spec is not None and self._sample_spec != self._board_spec():
+            self.log("棋盤格規格與樣本不符，請恢復原規格或重新讀取／擷取照片。")
+            return
         if self.captured_count < 10:
             self.log(f"樣本僅 {self.captured_count} 組，建議至少 10 組不同角度再校正。")
             return
@@ -444,6 +577,8 @@ class CalibWindow(QMainWindow):
                 for i in sorted(bad, reverse=True):
                     del self.objpoints[i]
                     del self.imgpoints[i]
+                    if self._photo_paths:
+                        del self._photo_paths[i]
                 self.captured_count = len(self.imgpoints)
                 self.log(f"已剔除 {len(bad)} 組異常樣本，剩 {self.captured_count} 組，重新計算...")
                 QApplication.processEvents()
@@ -495,6 +630,7 @@ class CalibWindow(QMainWindow):
             square_size=self.spn_square.value(),
             serial_number=self.connected_sn,
             sample_count=self.captured_count,
+            source_images=np.asarray(self._photo_paths, dtype=str),
         )
         self.log(f"已儲存至 {out_name}")
 
@@ -520,6 +656,8 @@ class CalibWindow(QMainWindow):
             "sample_count": self.captured_count,
             "calibrated_at": datetime.now().isoformat(timespec="seconds"),
         }
+        if self._photo_paths:
+            entry["source_images"] = list(self._photo_paths)
 
         try:
             count = calib_store.save_intrinsic(self.connected_sn, entry)
@@ -576,6 +714,11 @@ class CalibWindow(QMainWindow):
         self.objpoints = []
         self.imgpoints = []
         self.captured_count = 0
+        self.image_size = None
+        self._sample_spec = None
+        self._photo_paths = []
+        self.lbl_photo_source.setText("尚未載入照片")
+        self.lbl_photo_source.setToolTip("")
         self.log("已清空樣本。")
 
     # ---------- 其他 ----------
