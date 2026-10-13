@@ -13,10 +13,10 @@
 **更新時間**：2026-10-13
 
 **【SB 偵測失敗原因查證（2026-10-13）】**
-- 使用者詢問 SB 精度與大量照片偵測不到的原因；本輪做診斷，未改偵測程式或重算／覆寫內參。
+- 使用者確認修改後，已修正 SB 的 `flags=` 傳法並加入失敗時 EXHAUSTIVE 重試，成功視角記錄實際 detector／flags；未重算／覆寫現用內參。
 - 根因見 P1-010：`chessboard_metric.detect_folder` 把旗標放在 SB 的第三個位置參數（corners），應明確傳 `flags=`。
 - Pitcher 環境（本次 OpenCV 回報 5.0.0）實測 `Calibrate_Picture_Chessboard` 各 87 張：目前寫法 CF 80／CS 8；改用 `flags=CALIB_CB_NORMALIZE_IMAGE` 測試 CF 87／CS 85；傳統方法加 adaptive/normalize 均 87。角點成功率不代表已驗證內參／3D 精度。
-- 剩餘 CS 第 8、12 張用明確 `flags=CALIB_CB_NORMALIZE_IMAGE | CALIB_CB_EXHAUSTIVE` 均成功；因此正規化加失敗重試可找回本批全部照片。下一步若實作修正，改明確旗標及重試策略，保存所用偵測方法；勿直接覆寫現用內參。
+- 已用正式 detect_folder 重驗整批：CF 87/87、CS 87/87（CS 有 2 張經 EXHAUSTIVE 重試成功）；16 項 test_chessboard_metric.py 測試通過，涵蓋旗標關鍵字、只重試失敗照片、兩次失敗才列入失敗名單。驗證不產出新內參或更新既有 detections.json；文件已提醒首次套用勿使用 --reuse-detections。
 
 **【calib.py 從照片計算內參（2026-10-13）】**
 - 使用者確認需求是讀取資料夾的棋盤格照片，再計算內參；不是載入既有 JSON／NPZ。
@@ -294,7 +294,7 @@
 ### [P1-010] SB 旗標誤傳到 corners 參數，造成大量棋盤格漏偵測
 
 - **登記日期**：2026-10-13
-- **狀態**：`OPEN`（根因及整批對照確認，尚未修改主程式）
+- **狀態**：`FIXED`（16 項回歸測試通過，正式偵測流程 CF／CS 各 87/87 成功）
 - **成因／影響**：`cv_utils/chessboard_metric.py` 的 `findChessboardCornersSB(gray, pattern, cv2.CALIB_CB_NORMALIZE_IMAGE)` 在目前 Python binding 中第三參數是輸出 corners，而非 flags，正規化未按預期啟用；影響 `calibrate_chessboard.py` 的照片篩選。`calib.py` 使用傳統角點偵測，不走此呼叫。
 - **驗證**：同一批 CF／CS 各 87 張，在暫存診斷腳本中改成明確 `flags=` 後，SB 成功數由 80／8 提升到 87／85；剩餘兩張加 EXHAUSTIVE 均成功。未更新原 detections.json、intrinsics.json。
 

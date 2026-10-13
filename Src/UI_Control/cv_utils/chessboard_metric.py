@@ -97,12 +97,18 @@ def detect_folder(folder, pattern, output, preview_every=10):
             raise ValueError(f"Mixed image sizes in {folder}: {path.name}")
         size = current_size
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        ok, corners = cv2.findChessboardCornersSB(gray, pattern, cv2.CALIB_CB_NORMALIZE_IMAGE)
+        # The third positional argument is the output corners, not flags.
+        flags = cv2.CALIB_CB_NORMALIZE_IMAGE
+        ok, corners = cv2.findChessboardCornersSB(gray, pattern, flags=flags)
+        if not ok:
+            flags |= cv2.CALIB_CB_EXHAUSTIVE
+            ok, corners = cv2.findChessboardCornersSB(gray, pattern, flags=flags)
         if not ok:
             failed.append(path.name)
         else:
             corners = canonical_corners(corners, pattern)
-            views.append({"name": path.name, "path": str(path.resolve()), "corners": corners.tolist()})
+            views.append({"name": path.name, "path": str(path.resolve()), "corners": corners.tolist(),
+                          "detector": "findChessboardCornersSB", "detection_flags": int(flags)})
             if preview_every and index % preview_every == 0:
                 cv2.drawChessboardCorners(image, pattern, corners.reshape(-1, 1, 2), True)
                 for k in (0, pattern[0] - 1, len(corners) - 1):

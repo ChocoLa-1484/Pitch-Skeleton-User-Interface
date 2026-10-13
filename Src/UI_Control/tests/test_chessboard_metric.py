@@ -1,6 +1,7 @@
 """Known-geometry tests: metric scale, distortion, planar degeneracy and QC."""
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cv_utils.chessboard_metric import (align_pairs, board_edges, camera_arrays,
     estimate_eight_point, fit_eight_point, fit_pnp, object_points, triangulate)
 from cv_utils.stride_workflow import measure_annotations, pose_heel
+from cv_utils.chessboard_metric import detect_folder
+
+
+class ChessboardDetectionTests(unittest.TestCase):
+    def test_normalized_detection_retries_only_failures_and_records_used_flags(self):
+        points = np.mgrid[0:7, 0:7].T.reshape(-1, 1, 2).astype(np.float32) * 20 + 40
+        normal = cv2.CALIB_CB_NORMALIZE_IMAGE
+        exhaustive = normal | cv2.CALIB_CB_EXHAUSTIVE
+        calls = []
+
+        def detect(gray, pattern, *, flags):
+            # Keyword-only flags catch the Python binding mistake. Images 1,
+            # 2 and 3 model immediate success, retry success and total failure.
+            image_id = int(gray[0, 0])
+            calls.append((image_id, flags))
+            success = image_id == 1 or (image_id == 2 and flags == exhaustive)
+            return success, points.copy() if success else None
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for image_id in (1, 2, 3):
+                (root / f'{image_id}.png').touch()
+            with patch('cv_utils.chessboard_metric.read_image', side_effect=lambda p:
+                       np.full((240, 320, 3), int(p.stem), np.uint8)), \
+                 patch('cv_utils.chessboard_metric.cv2.findChessboardCornersSB', side_effect=detect):
+                result = detect_folder(root, (7, 7), root / 'previews', preview_every=0)
+            self.assertFalse((root / 'previews').exists())
+
+        self.assertEqual(calls, [(1, normal), (2, normal), (2, exhaustive),
+                                 (3, normal), (3, exhaustive)])
+        self.assertEqual(result['total_images'], 3)
+        self.assertEqual(result['failed'], ['3.png'])
+        self.assertEqual([v['name'] for v in result['views']], ['1.png', '2.png'])
+        self.assertEqual([v['detection_flags'] for v in result['views']], [normal, exhaustive])
+        for view in result['views']:
+            self.assertEqual(view['detector'], 'findChessboardCornersSB')
+            self.assertEqual(np.asarray(view['corners']).shape, (49, 2))
 
 
 class MetricGeometryTests(unittest.TestCase):
