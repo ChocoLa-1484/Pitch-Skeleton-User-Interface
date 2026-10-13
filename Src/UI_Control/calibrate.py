@@ -547,7 +547,7 @@ class CalibrationWindow(QMainWindow):
     def intrinsic_finished(self, result):
         rms, K, dist, errors, tilts = result
         panel = self.panel
-        verdict, problems, _ = panel._assess(rms, errors, tilts)
+        verdict, problems, _ = panel._assess(rms, errors, tilts, K)
         if not np.isfinite(rms) or rms > panel.RMS_MAX:
             raise ValueError("內參 RMS {:.3f} px，須低於或等於 {} px。請清空樣本後改善光線、清晰度再拍。"
                              .format(rms, panel.RMS_MAX))
@@ -561,6 +561,7 @@ class CalibrationWindow(QMainWindow):
             "pattern": [self.cols.value(), self.rows.value()], "square_size_mm": self.square.value(),
             "sample_count": panel.captured_count, "calibrated_at": datetime.now().isoformat(timespec="seconds"),
             "sample_images": ["intrinsic/images_SN{}/{}".format(sn, name) for name in panel.sample_files],
+            "distortion_locked": panel.chk_lock_dist.isChecked(), "lens_focal_mm": panel.spn_focal.value() or None,
         }
         validate_intrinsic(entry)
         np.savez(str(self.session / "intrinsic" / ("calib_SN{}.npz".format(sn))),
