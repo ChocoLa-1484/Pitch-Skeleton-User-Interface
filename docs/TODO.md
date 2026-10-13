@@ -12,6 +12,14 @@
 
 **更新時間**：2026-10-13
 
+**【棋盤格內參／外參／量測拆分（2026-10-13）】**
+- 使用者要求分開棋盤格內外參。內參保留 calibrate_chessboard.py；新增 calibrate_chessboard_extrinsic.py，提供 pnp／8point／both，讀取既有內參與角點，或用 --images 另讀同規格同步棋盤照片。輸出沿用 metric_stereo_v1，無需投球影片。
+- 量測入口改為只讀既有 stereo.json，缺外參時提示先執行新命令，不再暗中重算。外參解算與 load_rig 抽至 cv_utils/chessboard_extrinsic.py；原 metric_session.load_rig 呼叫仍相容。
+- 進場已有使用者修改的 calibrate_cross.py、chessboard_metric.py 預設路徑與 CALIBRATION.md 十字架照片路徑，保留。
+- 驗證：test_chessboard_metric 16 項、test_chessboard_extrinsic 3 項、test_metric_session 12 項通過；新 CLI 合成幾何驗證兩種方法均恢復已知 R／t，不需影片，來源內參位元組保持不變。量測 CLI 用已存外參完成實際暫存影片／點位測試，不重算外參。--help 與 diff 檢查正常。
+- test_video_3d_replay 13 項通過、1 項本機 P05 測試失敗：影片為 1920×1084，而現存 Db/Calibration/chessboard/pnp/stereo.json 的 CF 內參為 1920×1080；拒收發生在既有 video_widget_2 尺寸檢查，load_rig 搬移前後 AST 完全一致。未改校正值或影片以繞過檢查。
+- 操作文件已更新為內參 → 獨立外參 → 量測。後續若分析 P05，須指定與該錄影相符的校正檔；本輪未重算正式校正資料。
+
 **【SB 偵測失敗原因查證（2026-10-13）】**
 - 使用者確認修改後，已修正 SB 的 `flags=` 傳法並加入失敗時 EXHAUSTIVE 重試，成功視角記錄實際 detector／flags；未重算／覆寫現用內參。
 - 根因見 P1-010：`chessboard_metric.detect_folder` 把旗標放在 SB 的第三個位置參數（corners），應明確傳 `flags=`。

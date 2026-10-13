@@ -1,4 +1,4 @@
-"""CLI workflow shared by the two independently estimated metric stereo rigs."""
+"""Measure from a saved metric stereo rig; calibration is a separate command."""
 import argparse
 import csv
 from datetime import datetime, timezone
@@ -7,9 +7,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .chessboard_metric import (DEFAULT_CALIBRATION, DEFAULT_VIDEO, align_pairs,
-    fit_eight_point, fit_pnp, paired_views, read_json, save_image, triangulate,
-    validate_rig, write_json)
+from .chessboard_metric import (DEFAULT_CALIBRATION, DEFAULT_VIDEO,
+    read_json, save_image, triangulate, write_json)
+from .chessboard_extrinsic import load_rig
 
 
 def find_videos(folder):
@@ -307,14 +307,14 @@ def save_measurement(output, result, annotations, videos, cameras):
 
 
 def main(method):
-    parser = argparse.ArgumentParser(description=f"{method}: metric stereo calibration and foot-contact stride measurement")
+    parser = argparse.ArgumentParser(description=f"{method}: foot-contact measurement using a saved stereo.json")
     parser.add_argument("--calibration", type=Path, default=DEFAULT_CALIBRATION)
     parser.add_argument("--output", type=Path, help=f"Default: calibration/{method}")
     parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO)
     parser.add_argument("--frame", type=int, help="Zero-based CF frame; default from Keyframes.FC.frame")
     parser.add_argument("--reference-frame", type=int, default=0, help="Initial standing CF frame for the rear heel (default 0)")
     parser.add_argument("--cs-frame-offset", type=int, default=0)
-    parser.add_argument("--max-pairs", type=int, default=40)
+    parser.add_argument("--stereo", type=Path, help="Saved rig; default: calibration/{method}/stereo.json")
     parser.add_argument("--annotations", type=Path, help="Saved original-pixel point correspondences")
     parser.add_argument("--annotate", action="store_true", help="Open video frame picker and click reference/heel in both cameras")
     parser.add_argument("--pose-annotations", action="store_true", help="Read exact heel keypoints at reference/contact frames; refuse missing skeletons")
@@ -324,8 +324,6 @@ def main(method):
     parser.add_argument("--expected-cm", nargs=2, type=float, default=(60., 70.), help="Validation interval only; NEVER used to fit scale")
     parser.add_argument("--max-reprojection-px", type=float, default=3.)
     args = parser.parse_args()
-    if args.max_pairs < 5:
-        parser.error("Use >=5 pairs for training and held-out board checks")
     if sum(bool(x) for x in (args.annotate, args.annotations, args.pose_annotations)) > 1:
         parser.error("Choose --annotate, --annotations or --pose-annotations")
     if args.pose_annotations and args.ground_plane:
@@ -335,43 +333,22 @@ def main(method):
     if not np.isfinite(args.max_reprojection_px) or args.max_reprojection_px <= 0:
         parser.error("max-reprojection-px must be positive")
     cv2.setNumThreads(4)
+    rig_path = args.stereo or args.calibration / method / "stereo.json"
+    if not rig_path.is_file():
+        raise FileNotFoundError(
+            f"Missing {rig_path}; run calibrate_chessboard_extrinsic.py --method {method} first")
+    result = load_rig(rig_path)
+    if result['method'] != method:
+        raise ValueError(f"Expected a {method} rig, got {result['method']}")
+    cameras = result['intrinsics']
+    R = np.asarray(result['R_cs_from_cf'], float)
+    t = np.asarray(result['t_cs_from_cf_mm'], float).reshape(3)
+    warnings = result.get('warnings', [])
     output = args.output or args.calibration / method
     output.mkdir(parents=True, exist_ok=True)
     started = datetime.now(timezone.utc).isoformat()
-    write_json(output / "run_status.json", {"status": "incomplete", "started_utc": started, "measurement": None})
-    calibration = read_json(args.calibration / "intrinsics.json")
-    detections = read_json(args.calibration / "detections.json")
-    if (calibration.get("schema") != "chessboard_intrinsics_v1" or calibration["pattern"] != detections["pattern"]
-            or calibration["input"] != detections["input"]):
-        raise ValueError("Intrinsics/detection schema or pattern mismatch")
-    cameras, pattern, square = calibration["cameras"], tuple(calibration["pattern"]), calibration["square_mm"]
-    print("Resolving chessboard corner ordering and checking fixed camera geometry...", flush=True)
-    pairs, rejected = align_pairs(paired_views(calibration, detections["cameras"], args.max_pairs), cameras, pattern, square)
-    holdout = pairs[::5]
-    training = [p for i, p in enumerate(pairs) if i % 5]
-    if len(training) < 3 or not holdout:
-        raise ValueError("Insufficient consistent training/held-out pairs")
-    solver = fit_pnp if method == "pnp" else fit_eight_point
-    print(f"Fitting {method}: {len(training)} pairs; held out {len(holdout)}", flush=True)
-    R, t, details = solver(training, cameras, pattern, square)
-    train_checks, warnings = validate_rig(training, cameras, R, t, pattern, square)
-    held_checks, held_warnings = validate_rig(holdout, cameras, R, t, pattern, square)
-    warnings += ["Held-out: " + w for w in held_warnings]
-    for c in cameras:
-        warnings += [c + ": " + w for w in cameras[c].get("warnings", [])]
-    if method == "8point" and details["scale_relative_mad"] > .05:
-        warnings.append("Board scale varies by >5% across poses.")
-    result = {"schema": "metric_stereo_v1", "method": method, "units": "mm",
-              "coordinate_convention": "X_cs = R_cs_from_cf @ X_cf + t_cs_from_cf_mm",
-              "R_cs_from_cf": R, "t_cs_from_cf_mm": t, "baseline_mm": float(np.linalg.norm(t)),
-              "intrinsics": cameras, "board": {"pattern": pattern, "square_mm": square},
-              "fit": details, "training_pairs": [p["name"] for p in training],
-              "rejected_pairs": rejected, "training_board_checks": train_checks,
-              "held_out_board_checks": held_checks, "warnings": warnings,
-              "held_out_note": "Held out from stereo pose/scale fit; intrinsics use the full image collection.",
-              "corner_ordering": "PnP fixed-rig consensus resolves square-board symmetry; 8point pose and scale are then fitted independently.",
-              "independently_validated_for_measurement": False}
-    write_json(output / "stereo.json", result)
+    write_json(output / "run_status.json", {"status": "incomplete", "started_utc": started, "measurement": None,
+                                           "stereo": str(rig_path.resolve())})
     videos = find_videos(args.video_dir)
     frame, source = default_contact_frame(args.video_dir)
     if args.frame is not None:
@@ -417,8 +394,7 @@ def main(method):
         save_measurement(output, measurement, document, videos, cameras)
         write_json(output / "annotations.json", document)
     summary = [f"Method: {method}", f"Baseline: {np.linalg.norm(t):.2f} mm",
-               f"Training pairs: {len(training)}; held out: {len(holdout)}; rejected: {len(rejected)}",
-               f"Held-out median square edge RMSE: {np.median([r['square_rmse_mm'] for r in held_checks]):.3f} mm",
+               f"Saved calibration: {rig_path.resolve()}",
                f"FC frame: {document['frame_cf'] if document else frame} (CF); {document['frame_cs'] if document else frame + args.cs_frame_offset} (CS)",
                f"Reference: initial standing {args.heel} heel, frame {document.get('reference_frame_cf', frame) if document else args.reference_frame} (CF)",
                "Verify FC visually. Same-rear-heel displacement differs from front-foot stride."]
@@ -432,7 +408,7 @@ def main(method):
     summary += ["REVIEW: " + w for w in warnings]
     (output / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
     write_json(output / "run_status.json", {"status": "measurement_review_required" if measurement else "needs_annotations", "started_utc": started,
-               "stereo": "stereo.json", "measurement": "measurement.json" if measurement else None})
+               "stereo": str(rig_path.resolve()), "measurement": "measurement.json" if measurement else None})
     print("\n".join(summary))
     print(f"Saved: {output}")
 

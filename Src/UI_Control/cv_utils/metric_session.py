@@ -7,39 +7,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .chessboard_metric import camera_arrays, read_json, write_json
+from .chessboard_metric import write_json
+from .chessboard_extrinsic import CONVENTION, load_rig
 from .stride_workflow import (annotation_template, annotations_from_pose, find_videos,
                               measure_annotations, save_measurement, video_frame)
 
-CONVENTION = "X_cs = R_cs_from_cf @ X_cf + t_cs_from_cf_mm"
 DEFINITION = "initial_rear_heel_to_same_rear_heel_at_front_foot_contact"
-
-
-def load_rig(path):
-    path = Path(path).resolve()
-    rig = read_json(path)
-    if (rig.get("schema") != "metric_stereo_v1" or rig.get("units") != "mm"
-            or rig.get("coordinate_convention") != CONVENTION
-            or rig.get("method") not in ("pnp", "8point")):
-        raise ValueError("需要棋盤流程產生的 metric_stereo_v1 / mm / CF→CS stereo.json。")
-    R = np.asarray(rig["R_cs_from_cf"], float)
-    t = np.asarray(rig["t_cs_from_cf_mm"], float)
-    if (R.shape != (3, 3) or t.size != 3 or not np.isfinite(R).all()
-            or not np.isfinite(t).all() or np.linalg.norm(t) <= 0
-            or not np.allclose(R.T @ R, np.eye(3), atol=1e-5)
-            or not np.isclose(np.linalg.det(R), 1., atol=1e-5)):
-        raise ValueError("校正外參不是有效旋轉／毫米平移。")
-    for name in ("cf", "cs"):
-        camera = rig["intrinsics"][name]
-        K, dist = camera_arrays(camera)
-        size = np.asarray(camera["image_size"])
-        if (K.shape != (3, 3) or not np.isfinite(K).all() or min(K[0, 0], K[1, 1]) <= 0
-                or not np.allclose(K[2], [0, 0, 1]) or not np.isfinite(dist).all()
-                or dist.size not in (4, 5, 8, 12, 14)
-                or size.shape != (2,) or not np.isfinite(size).all()
-                or np.any(size <= 0) or not np.equal(size, size.astype(int)).all()):
-            raise ValueError(f"{name.upper()} 內參／影像尺寸無效。")
-    return rig
 
 
 class MetricSession:

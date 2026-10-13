@@ -108,19 +108,29 @@ python -m unittest discover -s Src/UI_Control/tests -v
 ```powershell
 conda activate Pitcher
 
-# 1. 內參、畸變與角點檢測
+# 1. 只算內參、畸變與角點檢測
 python Src/UI_Control/calibrate_chessboard.py
 
-# 2. 棋盤 PnP 與固定內參雙目精修
-python Src/UI_Control/measure_stride_pnp.py
+# 2. 只算外參：讀取上一步內參，分別輸出 PnP 與 8-point
+python Src/UI_Control/calibrate_chessboard_extrinsic.py --method both
 
-# 3. 8-point、三角測量與棋盤毫米尺度
+# 3. 量測：讀取已存的外參，不再重算校正
+python Src/UI_Control/measure_stride_pnp.py
 python Src/UI_Control/measure_stride_8point.py
 ```
 
 亦可用 `conda run --no-capture-output -n Pitcher python ...`。本機直接呼叫環境內 `python.exe` 而未啟用 Conda，可能在 OpenCV PnP 遇到 DLL 延遲載入錯誤；上述兩種方式已驗證。
 
-這些命令完成校正並輸出品質報告、影片幀圖。沒有量測點時，`run_status.json` 為 `needs_annotations`，不輸出假造的跨步距離。
+內參入口只寫 `intrinsics.json`、`detections.json` 與角點預覽。獨立外參入口不需要投球影片，固定內參後計算 R／t 與尺度，寫 `pnp/stereo.json`、`8point/stereo.json` 及各自的 `calibration_summary.txt`；可用 `--method pnp` 或 `--method 8point` 只算一種。JSON 格式維持 `metric_stereo_v1`，原 3D 回放及公制量測入口可繼續讀取。
+
+外參預設沿用內參資料夾的角點；也可另指定**同棋盤規格、相同相機／鏡頭設定與解析度**的同步照片，左右放在 `cf`、`cs` 並以同名配對。相機位置須與待分析影片一致，多個棋盤位置需保持兩台相機不動：
+
+```powershell
+python Src/UI_Control/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard --images "D:/外參棋盤照片" --output Db/Calibration/chessboard_new_rig --method both
+python Src/UI_Control/measure_stride_pnp.py --stereo Db/Calibration/chessboard_new_rig/pnp/stereo.json --annotate
+```
+
+外參的 `--output` 是輸出根目錄，其下依方法建立 `pnp`／`8point`；`--images` 產生的角點另存 `extrinsic_detections.json`，不覆寫內參角點。量測的 `--stereo` 可直接指定外參檔，省略時讀取 `--calibration` 下的 `<方法>/stereo.json`；缺檔會提示先執行外參命令。量測才會輸出影片幀圖，沒有量測點時 `run_status.json` 為 `needs_annotations`。
 
 ### 跨幀選點與量距離
 
@@ -216,10 +226,11 @@ CF 的 fx/fy 約 1.097，且部分雙目重投影超過 3 px，已記錄警告�
 
 ```powershell
 python Src/UI_Control/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
+python Src/UI_Control/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard_square_pixels --method both
 python Src/UI_Control/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
 ```
 
-同批檢測重擬合內參可加 `--reuse-detections`，僅限影像內容與 `--pattern` 未變。`--max-views` 控制內參取樣，`--max-pairs` 控制雙目取樣，`--preview-every 0` 關閉角點預覽。
+同批檢測重擬合內參可加 `--reuse-detections`，僅限影像內容與 `--pattern` 未變。內參命令的 `--max-views` 控制內參取樣，外參命令的 `--max-pairs` 控制雙目取樣；量測命令不再接受 `--max-pairs`。`--preview-every 0` 關閉角點預覽。
 
 ### 輸出
 

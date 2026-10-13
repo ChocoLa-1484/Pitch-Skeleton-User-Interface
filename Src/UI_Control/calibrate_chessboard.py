@@ -1,4 +1,4 @@
-"""Calibrate cf/cs intrinsics from 7x7 inner corners, 100 mm squares."""
+"""Calibrate cf/cs intrinsics only; run calibrate_chessboard_extrinsic.py for extrinsics."""
 import argparse
 from pathlib import Path
 import cv2
@@ -46,6 +46,7 @@ def main():
             print(f"  REVIEW: {warning}")
         write_json(args.output / "intrinsics.json", result)
     print(f"Saved: {args.output / 'intrinsics.json'}")
+    print('Next: run calibrate_chessboard_extrinsic.py with --calibration pointing to this output directory.')
 
 
 if __name__ == "__main__":

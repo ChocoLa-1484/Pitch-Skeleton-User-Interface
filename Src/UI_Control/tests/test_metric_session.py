@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cv_utils.chessboard_metric import read_json, write_json
 from cv_utils.metric_session import CONVENTION, MetricSession, load_rig
+from cv_utils import stride_workflow
 
 
 class MetricSessionTests(unittest.TestCase):
@@ -57,6 +59,38 @@ class MetricSessionTests(unittest.TestCase):
             for camera in ("cf", "cs"):
                 document["points"][name][camera] = self.project(self.xyz[name], camera)
         return document
+
+    def test_measurement_cli_only_reads_saved_rig_without_refitting_or_intrinsic_files(self):
+        annotations_path = self.root / 'annotations.json'
+        write_json(annotations_path, self.annotations())
+        before = self.rig_path.read_bytes()
+        output = self.root / 'measurement'
+        argv = ['measure_stride_pnp.py', '--stereo', str(self.rig_path),
+                '--video-dir', str(self.root), '--output', str(output),
+                '--annotations', str(annotations_path)]
+        with patch.object(sys, 'argv', argv), \
+             patch('cv_utils.chessboard_extrinsic.fit_chessboard_rig',
+                   side_effect=AssertionError('Measurement must not recalibrate')):
+            stride_workflow.main('pnp')
+        self.assertEqual(self.rig_path.read_bytes(), before)
+        self.assertFalse((output / 'stereo.json').exists())
+        result = read_json(output / 'measurement.json')
+        self.assertAlmostEqual(result['ground_distance_cm'], 65., places=5)
+        status = read_json(output / 'run_status.json')
+        self.assertEqual(status['stereo'], str(self.rig_path.resolve()))
+
+    def test_missing_or_wrong_method_rig_is_rejected_before_measurement(self):
+        output = self.root / 'measurement'
+        argv = ['measure_stride_pnp.py', '--calibration', str(self.root / 'missing'),
+                '--output', str(output)]
+        with patch.object(sys, 'argv', argv):
+            with self.assertRaisesRegex(FileNotFoundError, 'calibrate_chessboard_extrinsic.py'):
+                stride_workflow.main('pnp')
+        argv += ['--stereo', str(self.rig_path)]
+        with patch.object(sys, 'argv', argv):
+            with self.assertRaisesRegex(ValueError, 'Expected a 8point rig'):
+                stride_workflow.main('8point')
+        self.assertFalse(output.exists())
 
     def test_true_distance_ground_projection_and_export_match(self):
         result = self.session.measure(self.annotations())
