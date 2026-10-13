@@ -13,9 +13,12 @@ import sys
 import cv2
 import numpy as np
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))   # Src/UI_Control：讓 cv_utils 等模組可匯入
 from cv_utils.fluorescent_balls import DetectionConfig, detect_balls, read_image, write_image
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]   # 專案根目錄
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 

@@ -2,6 +2,9 @@ import numpy as np
 import cv2
 import json
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))   # Src/UI_Control：讓 cv_utils 等模組可匯入
 from cv_utils import calib_store
 # scale of 0505: 21556.837 mm/px
 # === Step 1: 載入資料 ===

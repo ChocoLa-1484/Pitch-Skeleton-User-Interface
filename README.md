@@ -129,10 +129,17 @@ python main.py
 
 ```powershell
 conda activate Pitcher
-python .\Src\UI_Control\calibrate.py
+python .\Src\UI_Control\calibration\main\calibrate.py
 ```
 
 按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。
+
+**RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參，需另外安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
+
+```powershell
+conda activate Roma
+python .\Src\UI_Control\calibration\roma\roma_extrinsic.py .\Db\Record\<日期>_Pitcher01 --save
+```
 
 其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
 
@@ -150,5 +157,6 @@ Db\                      ← 不在 git 裡
         └─ calibration.json           錄影當下的校正值
 environment\             環境版本鎖定檔
 Src\UI_Control\          主程式
+└─ calibration\          校正工具（main：現行流程、chessboard_cross：棋盤格／十字架、roma：RoMa 外參）
 docs\                    開發文件
 ```

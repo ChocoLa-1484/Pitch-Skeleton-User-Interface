@@ -12,6 +12,17 @@
 4. 8 顆螢光粉球十字架：HSV 偵測與公制 PnP 外參
 5. 獨立螢光粉球提取
 6. `main_metric.py` 公制量測入口
+7. RoMa 外參校正（不需校正道具，研究測試中）
+
+**程式位置（2026-10-13 整理）**：校正程式都放在 `Src/UI_Control/calibration/`，可從任何資料夾執行。
+
+| 資料夾 | 內容 |
+|---|---|
+| `calibration/main/` | 現行流程：`calibrate.py`（整合精靈）、`calib.py`（單台內參，精靈內部也用它）、`01`／`02`／`03` 分步外參工具 |
+| `calibration/chessboard_cross/` | 同學（ChocoLa-1484）的公制方法：`calibrate_chessboard.py`、`calibrate_cross.py`、`extract_fluorescent_balls.py`、`measure_stride_pnp.py`、`measure_stride_8point.py` |
+| `calibration/roma/` | `roma_extrinsic.py`：RoMa 外參（第 7 節） |
+
+`main_metric.py`（主程式加公制量測頁）仍在 `Src/UI_Control/`。舊設備工具（`calib_extrin.py`、`calib_from_folder.py`、`extract_calib.py`、`calibrated_3d_viewer.py`、`view_3d_animation.py`）主程式沒用到，已刪除，需要時可從 git 歷史找回。
 
 ## 1. 整合校正工具 `calibrate.py`（校正桿 + F 矩陣）
 
@@ -19,26 +30,26 @@
 
 ```powershell
 conda activate Pitcher
-python .\Src\UI_Control\calibrate.py
+python .\Src\UI_Control\calibration\main\calibrate.py
 ```
 
 按「開始校正」後，在同一視窗依序完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。棋盤格每台至少擷取 15 組，校正桿至少 4 組，左右每張依相同球心順序標註 6 點。仍需人工移動校正板／桿及標註球心，不需另開 `main.py`、`01`、`02`。
 
 已校正內參且鏡頭、焦距及影像尺寸／裁切未變時，可勾選「沿用這兩台已有內參」。外參照片也可匯入包含 `cf`、`cs` 的資料夾，兩邊檔名必須相同。完整通過後才更新目前校正檔；每次的原始照片、點位、內參樣本、誤差報告與被取代檔案的備份保存在 `Db\Calibration\sessions\<時間>_wand\`，供之後與棋盤格外參方法比較。這版先實作校正桿方法。
 
-**8 顆粉紅球十字架的自動 HSV／PnP 外參**：執行 `python Src/UI_Control/calibrate.py --cross`。預設讀取 `intrinsic_20261008` 與 `Calibrate_Picture_Auto`，使用正面 SN24380115、側面 SN21055356，輸出毫米制外參、球號標註與品質報告到新的 `Db/Calibration/cross_pnp/<時間>/`。此功能不覆蓋現行 F 校正；世界座標、拍攝建議、量測限制與本批外參和現場位置的差異見 本文件第 4 節〈8 顆螢光粉球十字架〉。
+**8 顆粉紅球十字架的自動 HSV／PnP 外參**：執行 `python Src/UI_Control/calibration/main/calibrate.py --cross`。預設讀取 `intrinsic_20261008` 與 `Calibrate_Picture_Auto`，使用正面 SN24380115、側面 SN21055356，輸出毫米制外參、球號標註與品質報告到新的 `Db/Calibration/cross_pnp/<時間>/`。此功能不覆蓋現行 F 校正；世界座標、拍攝建議、量測限制與本批外參和現場位置的差異見 本文件第 4 節〈8 顆螢光粉球十字架〉。
 
-**只提取螢光粉球**：執行 `python Src/UI_Control/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 本文件第 5 節〈獨立螢光粉球提取〉。
+**只提取螢光粉球**：執行 `python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 本文件第 5 節〈獨立螢光粉球提取〉。
 
 新入口以程式位置解析路徑，可從任意工作目錄啟動。舊有分步工具仍可使用：
 
 ```
 cd Src\UI_Control
-python calib.py                  # 1. 每台相機的內參，並指定正面／側面
-python main.py                   # 2.「2D 相機」分頁拍校正桿照片
-python 01_ball_detect_manual.py  # 3. 標註對應點
-python 02_ransac_8points.py      # 4. 計算 F 矩陣
-python 03_3d.py                  # 5.（選用）驗證
+python calibration\main\calib.py                  # 1. 每台相機的內參，並指定正面／側面
+python main.py                                   # 2.「2D 相機」分頁拍校正桿照片
+python calibration\main\01_ball_detect_manual.py  # 3. 標註對應點
+python calibration\main\02_ransac_8points.py      # 4. 計算 F 矩陣
+python calibration\main\03_3d.py                  # 5.（選用）驗證
 ```
 
 詳細步驟與注意事項見本文件第 2 節。
@@ -47,7 +58,7 @@ python 03_3d.py                  # 5.（選用）驗證
 
 所有校正結果都存在 `Db\Calibration\`（不進 git），程式會自動讀取，不必再手動把數字貼進程式碼。
 
-**整合入口（2026-10-09）**：專案根目錄執行 `python Src/UI_Control/calibrate.py`。以校正精靈整合下面的 1–5 步，不載入骨架模型；內參重用 `calib.CalibWindow` 的取樣、角點與品質評估，計算放到背景執行，結果先暫存於本次 session。兩台內參及外參都成功後，才一起寫入現用校正檔。
+**整合入口（2026-10-09）**：專案根目錄執行 `python Src/UI_Control/calibration/main/calibrate.py`。以校正精靈整合下面的 1–5 步，不載入骨架模型；內參重用 `calib.CalibWindow` 的取樣、角點與品質評估，計算放到背景執行，結果先暫存於本次 session。兩台內參及外參都成功後，才一起寫入現用校正檔。
 
 - 全新內參每台至少 15 組，RMS 須 ≤ 1 px；覆蓋區域、傾斜角度等建議列在紀錄。保留原始棋盤格照片與 NPZ 角點，方便重算。
 - 外參照片至少 4 組、每張 6 點，正面與側面必須同名；拍照與標註都在同一視窗。左右 1–6 必須對應同一實體球心。滾輪縮放、Ctrl＋拖曳平移、右鍵撤銷。最後一張不必再切換即可保存。
@@ -72,12 +83,12 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 | 步驟 | 執行 | 要接什麼 | 產出 |
 |---|---|---|---|
-| 1. 內參（每台各做一次） | `python calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
+| 1. 內參（每台各做一次） | `python calibration\main\calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
 | 2. 指定正面/側面 | `calib.py` 第 4 區 → 儲存角色 | — | `camera_roles.json` |
 | 3. 拍外參照片 | `python main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Record\Calibrate_Picture\cf\`、`cs\` |
-| 4. 標註對應點 | `python 01_ball_detect_manual.py`（先正面再側面，每張 6 點，滾輪換張） | — | `extrinsic\selected_points_cf.json`、`_cs.json` |
-| 5. 算 F 矩陣 | `python 02_ransac_8points.py` | — | `extrinsic\fundamental.json` |
-| 6. 驗證 | `python 03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
+| 4. 標註對應點 | `python calibration\main\01_ball_detect_manual.py`（先正面再側面，每張 6 點，滾輪換張） | — | `extrinsic\selected_points_cf.json`、`_cs.json` |
+| 5. 算 F 矩陣 | `python calibration\main\02_ransac_8points.py` | — | `extrinsic\fundamental.json` |
+| 6. 驗證 | `python calibration\main\03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
 
 **注意事項**
 - 以上都要在 `Src\UI_Control` 底下執行
@@ -109,13 +120,13 @@ python -m unittest discover -s Src/UI_Control/tests -v
 conda activate Pitcher
 
 # 1. 內參、畸變與角點檢測
-python Src/UI_Control/calibrate_chessboard.py
+python Src/UI_Control/calibration/chessboard_cross/calibrate_chessboard.py
 
 # 2. 棋盤 PnP 與固定內參雙目精修
-python Src/UI_Control/measure_stride_pnp.py
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_pnp.py
 
 # 3. 8-point、三角測量與棋盤毫米尺度
-python Src/UI_Control/measure_stride_8point.py
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_8point.py
 ```
 
 亦可用 `conda run --no-capture-output -n Pitcher python ...`。本機直接呼叫環境內 `python.exe` 而未啟用 Conda，可能在 OpenCV PnP 遇到 DLL 延遲載入錯誤；上述兩種方式已驗證。
@@ -126,10 +137,10 @@ python Src/UI_Control/measure_stride_8point.py
 
 ```powershell
 # 115 是目視檢查起始值，可在視窗逐幀調整精確落地時刻
-python Src/UI_Control/measure_stride_pnp.py --annotate --reference-frame 0 --frame 115 --heel right --ground-plane
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_pnp.py --annotate --reference-frame 0 --frame 115 --heel right --ground-plane
 
 # 完全相同的選點用另一條路徑比較
-python Src/UI_Control/measure_stride_8point.py --annotations Db/Calibration/chessboard/pnp/annotations.json
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_8point.py --annotations Db/Calibration/chessboard/pnp/annotations.json
 ```
 
 視窗依序要求：
@@ -165,7 +176,7 @@ CS 既有骨架的核對線索如下，單位為原始像素，**不是厘米量
 有完整骨架時可執行：
 
 ```powershell
-python Src/UI_Control/measure_stride_pnp.py --pose-annotations --reference-frame 0 --frame 115 --heel right
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_pnp.py --pose-annotations --reference-frame 0 --frame 115 --heel right
 ```
 
 它讀取確切 `frame_number`、HALPE-26 腳跟索引、信心值 ≥0.5，同幀只能一人。這組資料 CF 缺 115 幀，會明確拒絕，請用 `--annotate`。模型腳跟與鞋底實際接觸點仍可能有誤差。
@@ -215,8 +226,8 @@ CF 的 fx/fy 約 1.097，且部分雙目重投影超過 3 px，已記錄警告�
 若確認 fx/fy 比例，可明確指定：
 
 ```powershell
-python Src/UI_Control/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
-python Src/UI_Control/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
+python Src/UI_Control/calibration/chessboard_cross/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
+python Src/UI_Control/calibration/chessboard_cross/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
 ```
 
 同批檢測重擬合內參可加 `--reuse-detections`，僅限影像內容與 `--pattern` 未變。`--max-views` 控制內參取樣，`--max-pairs` 控制雙目取樣，`--preview-every 0` 關閉角點預覽。
@@ -252,12 +263,12 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ```powershell
 conda activate Pitcher
-python Src/UI_Control/calibrate.py --cross
+python Src/UI_Control/calibration/main/calibrate.py --cross
 ```
 
-也可以執行 `python Src/UI_Control/calibrate_cross.py`。`--help` 列出所有參數；離線功能不需要相機 SDK、Qt 或骨架模型。原本 `calibrate.py` 不加參數仍開啟原校正精靈。
+也可以執行 `python Src/UI_Control/calibration/chessboard_cross/calibrate_cross.py`。`--help` 列出所有參數；離線功能不需要相機 SDK、Qt 或骨架模型。原本 `calibrate.py` 不加參數仍開啟原校正精靈。
 
-只需提取螢光粉球時，使用獨立入口 `python Src/UI_Control/extract_fluorescent_balls.py`。單張／資料夾輸入、HSV 參數與球心輸出見 本文件第 5 節〈獨立螢光粉球提取〉；此入口不讀內參，也不執行 PnP。
+只需提取螢光粉球時，使用獨立入口 `python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py`。單張／資料夾輸入、HSV 參數與球心輸出見 本文件第 5 節〈獨立螢光粉球提取〉；此入口不讀內參，也不執行 PnP。
 
 本次使用者確認的預設值：
 
@@ -294,7 +305,7 @@ ball3 不是地面點。若量到 ball3 球心離指定地面平面 H mm，則�
 
 ```powershell
 # 500 僅是範例；必須改成現場量到的球心高度
-python Src/UI_Control/calibrate.py --cross --ball3-height-mm 500
+python Src/UI_Control/calibration/main/calibrate.py --cross --ball3-height-mm 500
 ```
 
 若希望以投手板前緣中央的地面點作為正式原點，請量出該點在上述座標中的三維位置，再平移世界座標；若要 Y 軸代表「往本壘」，也要現場對準或測量旋轉。不能因裝置放在投手板上，就假設 ball3 位於板中心正上方、Y 一定指向本壘，或 ball5 位於地面。
@@ -339,8 +350,8 @@ T_camera_from_world = T_camera_from_device @ inverse(T_world_from_device)
 HSV 全畫面出現過多候選時，可限制搜尋區域；座標仍輸出為原始全圖像素：
 
 ```powershell
-python Src/UI_Control/calibrate.py --cross --roi-cf 800 650 350 350 --roi-cs 850 650 250 330
-python Src/UI_Control/calibrate.py --cross --detect-only
+python Src/UI_Control/calibration/main/calibrate.py --cross --roi-cf 800 650 350 350 --roi-cs 850 650 250 330
+python Src/UI_Control/calibration/main/calibrate.py --cross --detect-only
 ```
 
 ROI 範例針對本批照片的位置；之後拍攝必須重新檢查。少於 8 顆、半徑小於 3 px、太接近側視而嚴重重疊，都可能需要重拍，不能只放寬誤差門檻。
@@ -421,7 +432,7 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ## 5. 獨立螢光粉球提取
 
-入口：`Src/UI_Control/extract_fluorescent_balls.py`。
+入口：`Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py`。
 核心：`Src/UI_Control/cv_utils/fluorescent_balls.py`。
 
 只需要 OpenCV 與 NumPy，不讀內參，不計算 PnP，不載入 Qt、相機 SDK 或骨架模型。現有 `calibrate_cross.py` 共用同一個偵測核心，避免兩套 HSV 方法產生不同結果。
@@ -432,15 +443,15 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ```powershell
 conda activate Pitcher
-python Src/UI_Control/extract_fluorescent_balls.py
+python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py
 ```
 
 單張照片、單一相機或其他資料夾皆可，不要求 cf/cs 配對。資料夾會遞迴搜尋；保留來源子目錄結構，檔名包含原始副檔名，避免同名 JPG/PNG 衝突。
 
 ```powershell
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf/01.jpg
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cs
-python Src/UI_Control/extract_fluorescent_balls.py --input "D:/新照片" --output "D:/提取結果/run01"
+python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf/01.jpg
+python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cs
+python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py --input "D:/新照片" --output "D:/提取結果/run01"
 ```
 
 預設輸出至新的 `Db/Record/Ball_Extraction/<時間>/`。自訂輸出目錄必須尚不存在，且不能放在輸入資料夾內，以免下次把遮罩和標註圖當成來源照片。
@@ -448,7 +459,7 @@ python Src/UI_Control/extract_fluorescent_balls.py --input "D:/新照片" --outp
 ### 調整 HSV 與 ROI
 
 ```powershell
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf --roi 800 650 350 350 --h-min 135 --h-max 168 --s-min 105 --v-min 50
+python Src/UI_Control/calibration/chessboard_cross/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf --roi 800 650 350 350 --h-min 135 --h-max 168 --s-min 105 --v-min 50
 ```
 
 - OpenCV 8-bit HSV：H=0–179，S/V=0–255。預設 H=135–168、S≥105、V≥50 是從現有照片調出的起點，新光源與曝光下應查看遮罩再調整。
@@ -530,3 +541,41 @@ python Src/UI_Control/main_metric.py --check --frame 115 --annotations path/to/a
 本機四張原圖重新辨識流程已執行。預設 PnP 校正搭配自動辨識的第 0／115 幀腳跟，最大重投影約 25.25 px，超過 3 px 門檻，因此程式拒絕輸出距離；仍需核對左右腳、對應點、同步與相機設定，不能將這次自動結果視為準確量測。
 
 校正算法、影像條件與限制見 本文件第 3 節〈棋盤格內參、PnP 與 8-point 真實距離量測〉。
+
+## 7. RoMa 外參校正（不需校正道具，研究測試中）
+
+> 2026-10-13 加入，尚在測試，還沒取代校正桿／棋盤格流程。
+
+**做法**：RoMa（CVPR 2024）是稠密影像匹配模型，可以直接在正面、側面兩台相機「同一時間」的畫面之間找出大量對應點，不需要校正桿、棋盤格或手點。`roma_extrinsic.py` 從每一球的錄影取幾幀，用 MAGSAC 去除錯誤匹配，合併所有球後求一個 F。F 的方向慣例與 `02_ransac_8points.py` 相同（`x_front^T F x_side = 0`），主程式可直接使用。
+
+**用途**：
+- 不帶道具重新求外參，例如相機被碰過、或忘了拍校正照片時，直接用當天的錄影算。
+- 檢查相機有沒有被移動：工具會做「留一球交叉驗證」，某一球的誤差明顯偏大時會提醒。
+- 限制：F 本身沒有真實尺度，距離類數值仍需要已知長度（例如棋盤格或捲尺量的距離）；內參仍需用棋盤格校正。
+
+**安裝（另建 `Roma` 環境，不要裝進 Pitcher）**：RoMa 需要 Python ≥ 3.9、PyTorch ≥ 2.5，和主程式的環境不相容。
+
+```
+conda create -n Roma python=3.10 -y
+conda activate Roma
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+pip install git+https://github.com/ZhengMo1220/RoMa.git@77f8d68803526dcddfd9b7a46bc76125bdc25f15
+```
+
+第一次執行會自動下載模型權重（約 2 GB，需要網路），之後會使用快取。
+
+**使用**（在專案根目錄）：
+
+```
+conda activate Roma
+python Src/UI_Control/calibration/roma/roma_extrinsic.py Db/Record/20261020_Pitcher01
+python Src/UI_Control/calibration/roma/roma_extrinsic.py Db/Record/20261020_Pitcher01 --save
+python Src/UI_Control/calibration/roma/roma_extrinsic.py Db/Record/20261020_Pitcher01 --save --snapshot
+```
+
+- 不加選項：只計算、印出結果，不寫任何檔案。
+- `--save`：寫入 `Db/Calibration/extrinsic/fundamental.json`（會蓋掉 02 工具算的 F，檔案內記錄 `method: RoMa` 與來源影片）。之後錄影存的校正快照就會使用它。
+- `--snapshot`：再替每一球寫入 `calibration.json`，讓 3D 分頁讀到這組 F（已有的不覆蓋，加 `--force` 才覆蓋）。
+- `--frames 0,30,60`：每球取哪幾幀；`--pitcher-region`：只用投手附近的匹配點（依 CS 骨架 JSON 的人物框，研究中）。
+
+**現場建議**：相機架好後，錄幾球一般投球即可；畫面中有人在投手丘附近活動比空場好。拍攝期間相機不能被碰到。

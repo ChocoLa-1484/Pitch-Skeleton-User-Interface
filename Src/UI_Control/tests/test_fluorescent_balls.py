@@ -10,6 +10,8 @@ import unittest
 
 UI_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(UI_DIR))
+TOOL_DIR = UI_DIR / "calibration" / "chessboard_cross"   # 校正工具搬到 calibration/ 底下
+sys.path.insert(0, str(TOOL_DIR))
 
 import cv2
 import numpy as np
@@ -35,7 +37,7 @@ assert 'cv_utils.calibration_workflow' not in sys.modules
 assert 'PyQt5' not in sys.modules
 assert 'PySpin' not in sys.modules
 """
-        completed = subprocess.run([sys.executable, "-c", code], cwd=str(UI_DIR),
+        completed = subprocess.run([sys.executable, "-c", code], cwd=str(TOOL_DIR),
                                    capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         from cv_utils import cross_calibration

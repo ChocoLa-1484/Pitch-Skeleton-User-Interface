@@ -4,12 +4,16 @@ import numpy as np
 import os
 import json
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))   # Src/UI_Control：讓 cv_utils 等模組可匯入
 from cv_utils import calib_store
 
 # === 設定圖像資料夾路徑清單 ===
+_PICTURES = os.path.join(os.path.dirname(calib_store.CALIB_DIR), 'Record', 'Calibrate_Picture')
 img_folders = [
-    ('cf', '../../Db/Record/Calibrate_Picture/cf'),
-    ('cs', '../../Db/Record/Calibrate_Picture/cs')
+    ('cf', os.path.join(_PICTURES, 'cf')),
+    ('cs', os.path.join(_PICTURES, 'cs'))
 ]
 
 def process_folder(folder_name, img_folder):

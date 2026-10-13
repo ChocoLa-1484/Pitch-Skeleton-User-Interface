@@ -1,6 +1,6 @@
 """單一入口：兩台棋盤格內參 → 校正桿雙機拍照 → 標註 → 外參。
 
-啟動：python Src/UI_Control/calibrate.py（可從任何工作目錄執行）
+啟動：python Src/UI_Control/calibration/main/calibrate.py（可從任何工作目錄執行）
 相機固定後，依畫面指示移動棋盤格／校正桿；左右影像均依相同順序點 6 個球心。
 本工具不載入 YOLO / ViTPose。既有 calib.py、01、02 工具仍可獨立使用。
 """
@@ -11,12 +11,15 @@ import sys
 import time
 from datetime import datetime
 
+UI_DIR = Path(__file__).resolve().parents[2]   # Src/UI_Control
+sys.path.insert(0, str(UI_DIR))
+sys.path.insert(0, str(UI_DIR / "calibration" / "chessboard_cross"))   # 同學的十字架工具（--cross）
+
 # Offline eight-ball workflow is available before loading Qt/camera dependencies.
 if __name__ == "__main__" and "--cross" in sys.argv:
     from calibrate_cross import main as cross_main
     sys.exit(cross_main([argument for argument in sys.argv[1:] if argument != "--cross"]))
 
-UI_DIR = Path(__file__).resolve().parent
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 qt_plugins = Path(os.environ.get("CONDA_PREFIX", sys.prefix)) / "Library/plugins/platforms"
 if qt_plugins.is_dir():

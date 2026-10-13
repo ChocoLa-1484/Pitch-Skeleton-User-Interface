@@ -12,6 +12,14 @@
 
 **更新時間**：2026-10-13
 
+**【2026-10-13 本輪完成（使用者同意）】**
+- PR #2（同學：照片校正內參、SB 旗標修正、單一投手鎖定）已合併；`calib.py` 衝突保留雙方功能，同學的 P1-009 改編號為 P1-011。
+- 3D 分頁選 CS 或 CF 都自動載入兩支，順序固定為 CS→CF（第一支一定當側面套 K_S）。
+- 內參工具新增「鏡頭焦距」：fx 與焦距推算值差 15% 以上警告；≥ 25 mm 自動鎖畸變。
+- 校正程式搬到 `Src/UI_Control/calibration/{main,chessboard_cross,roma}/`，5 支舊設備工具刪除；每支工具自行加入 `Src/UI_Control` 到匯入路徑，可從任何資料夾執行；文件與測試已更新（99 passed）。
+- 新增 `calibration/roma/roma_extrinsic.py`（使用者要求推上 GitHub，下週牛棚實測）：Roma 環境安裝與用法見 `docs/CALIBRATION.md` 第 7 節。研究實驗數據仍只記在本機 `local/`。
+- 待使用者決定：3D 分頁「3D 外參」下拉選單預設改讀 `calibration.json`；校正工具加入「板子都朝同一方向轉」警告。
+
 **【SB 偵測失敗原因查證（2026-10-13）】**
 - 使用者確認修改後，已修正 SB 的 `flags=` 傳法並加入失敗時 EXHAUSTIVE 重試，成功視角記錄實際 detector／flags；未重算／覆寫現用內參。
 - 根因見 P1-010：`chessboard_metric.detect_folder` 把旗標放在 SB 的第三個位置參數（corners），應明確傳 `flags=`。

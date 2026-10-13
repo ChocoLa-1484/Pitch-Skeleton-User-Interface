@@ -5,8 +5,7 @@
 與安裝位置無關，因此一台一台單獨校正即可，不需要雙機同步或 GPIO 觸發線。
 
 使用方式：
-    cd Src\\UI_Control
-    python calib.py
+    python Src\\UI_Control\\calibration\\main\\calib.py（可從任何資料夾執行）
 
 流程：下拉選單選相機 → 連接 → 確認棋盤格規格 → 擷取 10~15 組不同角度
       → 執行校正 → 自動存到 Db/Calibration/intrinsic/
@@ -19,6 +18,9 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+
+UI_DIR = Path(__file__).resolve().parents[2]   # Src/UI_Control
+sys.path.insert(0, str(UI_DIR))
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 
@@ -36,7 +38,7 @@ import PySpin
 from camera_objects.single_camera.flir_camera_system import FlirCameraSystem
 from cv_utils import calib_store
 
-CONFIG_PATH = r".\camera_config\GH3_camera_config.yaml"
+CONFIG_PATH = str(UI_DIR / "camera_config" / "GH3_camera_config.yaml")
 
 
 def list_cameras():

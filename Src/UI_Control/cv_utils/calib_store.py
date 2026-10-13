@@ -4,14 +4,14 @@
 所有校正產出都放在 Db/Calibration/ 底下（Db 不進 git）：
 
     Db/Calibration/
-    ├─ camera_roles.json            哪台是正面、哪台是側面（calib.py 第 4 區產生）
+    ├─ camera_roles.json            哪台是正面、哪台是側面（calibration/main/calib.py 第 4 區產生）
     ├─ intrinsic/
     │   ├─ intrinsics_all.json      所有相機內參，以序號為鍵（calib.py）
     │   └─ calib_SN<序號>.npz        單台完整校正資料（calib.py）
     └─ extrinsic/
         ├─ selected_points_cf.json  正面標註點（01_ball_detect_manual.py）
         ├─ selected_points_cs.json  側面標註點（01_ball_detect_manual.py）
-        └─ fundamental.json         F 矩陣（02_ransac_8points.py）
+        └─ fundamental.json         F 矩陣（calibration/main/02_ransac_8points.py，或 calibration/roma/roma_extrinsic.py --save）
 
 路徑以本檔位置推算，不受執行時所在目錄影響。
 """
@@ -34,8 +34,7 @@ POINTS_JSON = {
 }
 FUNDAMENTAL_JSON = os.path.join(EXTRINSIC_DIR, "fundamental.json")
 
-# 舊設備（2026-02 前人）的校正資料，供 calib_extrin.py、calibrated_3d_viewer.py、
-# extract_calib.py、view_3d_animation.py 等舊工具讀寫；主流程不使用
+# 舊設備（2026-02 前人）的校正資料；讀寫它的舊工具已於 2026-10-13 刪除，資料夾保留備查，主流程不使用
 OLD_RIG_DIR = os.path.join(CALIB_DIR, "old_rig_20260223")
 
 
@@ -98,8 +97,10 @@ def get_intrinsic(sn):
 
 # ---------- 外參（F 矩陣） ----------
 
-def save_fundamental(F, front_sn, side_sn, inliers, total, threshold):
+def save_fundamental(F, front_sn, side_sn, inliers, total, threshold, extra=None):
+    """extra：額外記錄的欄位（例如 RoMa 工具記下方法與來源影片）"""
     write_json(FUNDAMENTAL_JSON, {
+        **(extra or {}),
         "F": np.asarray(F).tolist(),
         # 02 以側面為 pts1、正面為 pts2 估計，因此 F 滿足 x_front^T F x_side = 0
         "convention": "x_front^T F x_side = 0",
