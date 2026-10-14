@@ -564,7 +564,11 @@ pip install git+https://github.com/ZhengMo1220/RoMa.git@77f8d68803526dcddfd9b7a4
 
 第一次執行會自動下載模型權重（約 2 GB，需要網路），之後會使用快取。
 
-**使用**（在專案根目錄）：
+**使用（視窗版，建議）**：雙擊專案根目錄的 `start_roma.bat`，加入錄影資料夾、勾選選項後按「開始計算」，過程訊息顯示在視窗內。視窗版是 `roma_extrinsic_gui.py`（tkinter，Roma 環境內建，不需另裝），計算內容與下面的指令版相同。
+
+**內參從哪來**：RoMa 只算外參；`--save`／`--snapshot` 會搭配 `Db/Calibration` 裡現有的內參與正面／側面角色。目前 `calibrate.py` 要走完校正桿流程才會寫入內參，所以只用 RoMa 時，內參請用 `calib.py` 校正並在第 4 區儲存角色。
+
+**使用（指令版）**（在專案根目錄）：
 
 ```
 conda activate Roma

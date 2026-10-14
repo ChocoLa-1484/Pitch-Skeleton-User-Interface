@@ -134,12 +134,11 @@ python .\Src\UI_Control\calibration\main\calibrate.py
 
 按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。
 
-**RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參，需另外安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
+**RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參。第一次使用前需安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
 
-```powershell
-conda activate Roma
-python .\Src\UI_Control\calibration\roma\roma_extrinsic.py .\Db\Record\<日期>_Pitcher01 --save
-```
+1. 內參先用 `calib.py` 校正兩台相機，並在第 4 區指定正面／側面（`calibrate.py` 要走完校正桿流程才會存內參）。
+2. 雙擊專案根目錄的 `start_roma.bat`。
+3. 按「加入資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 
 其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
 
