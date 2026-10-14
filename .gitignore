@@ -180,3 +180,6 @@ local/
 
 # VS Code PyQt extension auto-generates these from .ui files; the program does not use them
 *_ui_ui.py
+Src/UI_Control/forms/main_window_ui.py
+Src/UI_Control/forms/video_ui_2_ui.py
+Src/UI_Control/forms/video_ui_compare_ui.py
