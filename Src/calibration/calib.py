@@ -517,6 +517,8 @@ class CalibWindow(QMainWindow):
     PIXEL_SIZE_MM = 0.00586      # GS3-U3-23S6C 像素大小 5.86 µm，用來把鏡頭焦距換算成 fx
     TELEPHOTO_MM = 25.0          # 焦距達此值自動勾選「鎖住畸變」
     FX_TOLERANCE = 0.15          # fx 與焦距推算值相差超過 15% 就警告
+    AXIS_MIN_TILT_DEG = 10.0     # 傾斜超過此角度的樣本才拿來看「往哪個方向轉」
+    AXIS_CONCENTRATION = 0.8     # 轉軸方向集中度超過此值（1＝全部同一軸）就警告
     REGION_NAMES = ["左上", "上", "右上", "左", "中", "右", "左下", "下", "右下"]
 
     def _coverage(self):
@@ -544,6 +546,7 @@ class CalibWindow(QMainWindow):
         )
         per_image_rms = []
         tilts = []
+        self._tilt_axes = []     # 每組板子的傾斜轉軸方向（度，影像平面內）
         for i in range(len(self.objpoints)):
             proj, _ = cv2.projectPoints(self.objpoints[i], rvecs[i], tvecs[i], mtx, dist)
             d = np.linalg.norm(self.imgpoints[i].reshape(-1, 2) - proj.reshape(-1, 2), axis=1)
@@ -551,6 +554,9 @@ class CalibWindow(QMainWindow):
             # 板子法向量與相機光軸的夾角
             R, _ = cv2.Rodrigues(rvecs[i])
             tilts.append(float(np.degrees(np.arccos(min(1.0, abs(R[2, 2]))))))
+            # 板子是繞哪個軸轉離正對相機：轉軸 = 光軸 × 板子法向量（落在影像平面內）
+            normal = R[:, 2] * np.sign(R[2, 2] or 1.0)
+            self._tilt_axes.append(float(np.degrees(np.arctan2(normal[0], -normal[1]))))
         return rms, mtx, dist, np.array(per_image_rms), np.array(tilts)
 
     def _assess(self, rms, per_image_rms, tilts, mtx=None):
@@ -582,6 +588,10 @@ class CalibWindow(QMainWindow):
         covered, missing = self._coverage()
         if missing:
             problems.append(f"畫面覆蓋 {covered}/9 區，缺：{'、'.join(missing)}（邊角沒拍到，畸變會校不準）")
+        axis_concentration = self._axis_concentration(tilts)
+        if axis_concentration is not None and axis_concentration > self.AXIS_CONCENTRATION:
+            problems.append(f"板子幾乎都朝同一個方向轉（集中度 {axis_concentration:.2f}），fx 可能算不準："
+                            "請讓板子上下、左右、斜向都傾斜（不要為了讓另一台相機看到而只朝一個方向轉）")
         if tilts.max() < self.MIN_TILT_DEG:
             problems.append(f"最大傾斜僅 {tilts.max():.0f}°，請加入傾斜 {self.MIN_TILT_DEG:.0f}° 以上的樣本")
         if self.captured_count < self.MIN_SAMPLES:
@@ -590,6 +600,14 @@ class CalibWindow(QMainWindow):
         if verdict == "良好" and problems:
             verdict = "良好，但有改善空間"
         return verdict, problems, bad
+
+    def _axis_concentration(self, tilts):
+        """傾斜轉軸方向的集中度（0～1）。轉軸沒有正負之分，所以角度先乘 2 再取平均向量長度；
+        只朝同一方向轉（轉軸互相平行）時接近 1，這時焦距與距離分不開，fx 會算不準。"""
+        axes = np.radians([a for a, t in zip(getattr(self, "_tilt_axes", []), tilts) if t >= self.AXIS_MIN_TILT_DEG])
+        if len(axes) < 3:
+            return None
+        return float(np.hypot(np.mean(np.cos(2 * axes)), np.mean(np.sin(2 * axes))))
 
     def run_calibration(self):
         if self._sample_spec is not None and self._sample_spec != self._board_spec():

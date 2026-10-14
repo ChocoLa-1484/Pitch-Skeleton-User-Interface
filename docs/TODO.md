@@ -18,7 +18,7 @@
 - `calibrate.py` 新增「只做內參」：兩台內參完成即發布內參與角色（`publish_intrinsics`，同樣先備份、失敗還原），不動既有外參；外參改用 RoMa。
 - `docs/PROJECT_LAYOUT.md` 併入 `DEVELOPMENT.md`〈程式目錄與攝影機設定〉。逐檔測試全部通過（新增 publish_intrinsics 測試）；各 CLI 從專案根目錄 `--help` 正常、主程式無畫面模式可啟動、RoMa 視窗版實跑正常。
 - 本機已用 10/08 牛棚 142 對棋盤照片產生 `Db/Calibration/chessboard/{pnp,8point}/stereo.json`（1920×1084），只適用 10/08 牛棚那組相機位置。
-- 仍待使用者決定：3D 分頁「3D 外參」下拉選單預設改回學姊方法；校正工具加入「板子都朝同一方向轉」警告。
+- 2026-10-14 使用者同意後完成：3D 分頁「3D 外參」預設改回學姊方法（舊版估算，讀 calibration.json）；內參工具在板子傾斜轉軸過度集中（集中度 > 0.8）時警告；新增 `start_calibrate.bat`。
 
 **UI_Control 分層與主程式攝影機設定（2026-10-14，完成）**
 - 使用者授權依功能分資料夾、更新路徑，將舊版／重複功能獨立保留，並在 main.py 加入曝光、焦距與顏色設定。

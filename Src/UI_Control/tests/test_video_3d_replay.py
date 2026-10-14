@@ -93,6 +93,9 @@ class Video3DTests(unittest.TestCase):
         loader.video_frames, loader.video_frames_2 = frames, [f.copy() for f in frames]
         loader.total_frames, loader.video_fps = 12, 60.
         loader.video_size, loader.is_loading = (640, 480), False
+        # 預設已改回學姊的方法（legacy）；這組測試驗證的是棋盤 PnP 公制模式，需明確選取
+        self.assertEqual(tab.calibration_combo.currentData(), 'legacy')
+        tab.calibration_combo.setCurrentIndex(tab.calibration_combo.findData('pnp'))
         tab.calibration_path.setText(str(self.rig_path))
         tab.updateVideoInfo()
         self.assertTrue(tab._calibration_ready, tab.calibration_status.text())

@@ -128,16 +128,13 @@ python Src/UI_Control/main.py
 
 新架設或移動相機後需要重新校正，結果自動存到 `Db\Calibration\`，錄影時會把當下的校正值一起存進該筆錄影資料夾。
 
-```powershell
-conda activate Pitcher
-python .\Src\calibration\calibrate.py
-```
+雙擊專案根目錄的 **`start_calibrate.bat`**（或在 Anaconda Prompt 執行 `conda activate Pitcher` 後 `python .\Src\calibration\calibrate.py`）。
 
-按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。
+按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。拍內參時板子要上下、左右、斜向都傾斜；只朝同一方向轉時程式會警告（fx 會算不準）。
 
 **RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參。第一次使用前需安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
 
-1. 執行上面的 `calibrate.py`，勾選「只做內參」後按「開始校正」，完成兩台內參（不必拍校正桿）。
+1. 雙擊 `start_calibrate.bat`，勾選「只做內參」後按「開始校正」，完成兩台內參（不必拍校正桿）。
 2. 雙擊專案根目錄的 `start_roma.bat`。
 3. 按「加入資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 

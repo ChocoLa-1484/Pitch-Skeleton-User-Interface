@@ -165,6 +165,10 @@ class PoseVideoTabControl(QWidget):
         for label, method in [('PnP 棋盤校正', 'pnp'), ('8Points 棋盤尺度', '8point'), ('舊版估算（無公制校正）', 'legacy')]:
             self.calibration_combo.addItem(label, method)
         self.calibration_path = QLineEdit(str(DEFAULT_CALIBRATION / 'pnp' / 'stereo.json'))
+        # 預設用學姊原本的方法：讀該球的 calibration.json（沒有才用內建 F）。
+        # stereo.json 只對拍棋盤那天的相機位置有效，預設 PnP 會讓其他天的錄影無聲無息套錯校正
+        self.calibration_combo.setCurrentIndex(self.calibration_combo.findData('legacy'))
+        self.calibration_path.setEnabled(False)
         browse = QPushButton('選擇外參…')
         apply = QPushButton('套用校正')
         self.offset_spin = QSpinBox()
@@ -181,7 +185,7 @@ class PoseVideoTabControl(QWidget):
                        self.heel_combo, self.save_analysis_button):
             row.addWidget(widget)
         self.ui.verticalLayout_6.insertLayout(0, row)
-        self.calibration_status = QLabel('PnP / 8Points：同一後腳腳跟的 3D 位移；需確認相機位置與校正時相同。')
+        self.calibration_status = QLabel('預設：舊版估算（讀該球的 calibration.json）。PnP / 8Points：同一後腳腳跟的 3D 位移；需確認相機位置與棋盤校正時相同。')
         self.calibration_status.setWordWrap(True)
         self.ui.verticalLayout_6.insertWidget(1, self.calibration_status)
         self.calibration_combo.currentIndexChanged.connect(self._calibration_method_changed)
