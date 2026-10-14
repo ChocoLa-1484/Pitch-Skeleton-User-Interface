@@ -8,11 +8,11 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cv_utils.chessboard_metric import (align_pairs, board_edges, camera_arrays,
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from Src.calibration.chessboard_metric import (align_pairs, board_edges, camera_arrays,
     estimate_eight_point, fit_eight_point, fit_pnp, object_points, triangulate)
-from cv_utils.stride_workflow import measure_annotations, pose_heel
-from cv_utils.chessboard_metric import detect_folder
+from Src.analysis.stride_workflow import measure_annotations, pose_heel
+from Src.calibration.chessboard_metric import detect_folder
 
 
 class ChessboardDetectionTests(unittest.TestCase):
@@ -34,9 +34,9 @@ class ChessboardDetectionTests(unittest.TestCase):
             root = Path(folder)
             for image_id in (1, 2, 3):
                 (root / f'{image_id}.png').touch()
-            with patch('cv_utils.chessboard_metric.read_image', side_effect=lambda p:
+            with patch('Src.calibration.chessboard_metric.read_image', side_effect=lambda p:
                        np.full((240, 320, 3), int(p.stem), np.uint8)), \
-                 patch('cv_utils.chessboard_metric.cv2.findChessboardCornersSB', side_effect=detect):
+                 patch('Src.calibration.chessboard_metric.cv2.findChessboardCornersSB', side_effect=detect):
                 result = detect_folder(root, (7, 7), root / 'previews', preview_every=0)
             self.assertFalse((root / 'previews').exists())
 
@@ -97,7 +97,7 @@ class MetricGeometryTests(unittest.TestCase):
         self.assertLess(info["stereo_rms_px"], .001)
 
     def test_eight_point_recovers_scale_without_pnp_pose(self):
-        with patch("cv_utils.chessboard_metric.solve_board_pose", side_effect=AssertionError("PnP must not fit 8point pose/scale")):
+        with patch("Src.calibration.chessboard_metric.solve_board_pose", side_effect=AssertionError("PnP must not fit 8point pose/scale")):
             R, t, info = fit_eight_point(self.pairs, self.cameras, (7, 7), 100.)
         np.testing.assert_allclose(R, self.R, atol=1e-4)
         np.testing.assert_allclose(t, self.t, atol=.1)
@@ -147,14 +147,14 @@ class MetricGeometryTests(unittest.TestCase):
     def test_sparse_pose_json_matches_frame_number_not_array_index(self):
         k0, k138 = [[100., 200., .9] for _ in range(26)], [[300., 400., .9] for _ in range(26)]
         records = [{"frame_number": 0, "keypoints": k0}, {"frame_number": 138, "keypoints": k138}]
-        with patch("cv_utils.stride_workflow.read_json", return_value=records):
+        with patch("Src.analysis.stride_workflow.read_json", return_value=records):
             self.assertEqual(pose_heel(Path("sparse.json"), 138, "right"), [300., 400.])
             with self.assertRaisesRegex(ValueError, "frame 95"):
                 pose_heel(Path("sparse.json"), 95, "right")
 
     def test_ambiguous_people_are_not_silently_selected(self):
         records = [{"frame_number": 0, "keypoints": [[1., 2., .9]]*26}]*2
-        with patch("cv_utils.stride_workflow.read_json", return_value=records):
+        with patch("Src.analysis.stride_workflow.read_json", return_value=records):
             with self.assertRaisesRegex(ValueError, "exactly one person"):
                 pose_heel(Path("people.json"), 0, "right")
 

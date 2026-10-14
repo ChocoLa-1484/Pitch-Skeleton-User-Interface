@@ -7,13 +7,13 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import cv2
 import numpy as np
 
-import calibrate_cross as cli
-from cv_utils import cross_calibration as cross
+import Src.calibration.calibrate_cross as cli
+from Src.calibration import cross_calibration as cross
 
 
 def camera_at(center):

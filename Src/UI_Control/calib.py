@@ -15,6 +15,13 @@
 已有照片：填入相機序號及棋盤格規格 → 讀取照片資料夾 → 執行校正。
 每次選擇一台相機的資料夾，不需連接相機。
 """
+
+# Support both python -m and direct file execution from any working directory.
+import sys as _sys
+from pathlib import Path as _Path
+if __package__ in (None, ""):
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+
 import os
 import sys
 from datetime import datetime
@@ -32,10 +39,11 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 
 import PySpin
-from camera_objects.single_camera.flir_camera_system import FlirCameraSystem
-from cv_utils import calib_store
+from Src.cameras.single_camera.flir_camera_system import FlirCameraSystem
+from Src.calibration import calib_store
 
-CONFIG_PATH = r".\camera_config\GH3_camera_config.yaml"
+from Src.paths import CAMERA_CONFIG_DIR
+CONFIG_PATH = str(CAMERA_CONFIG_DIR / "GH3_camera_config.yaml")
 
 
 def list_cameras():

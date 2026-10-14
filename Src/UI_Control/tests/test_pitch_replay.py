@@ -14,7 +14,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ.setdefault("CONDA_PREFIX", sys.prefix)
 if Path("C:/Windows/Fonts").is_dir():
     os.environ["QT_QPA_FONTDIR"] = "C:/Windows/Fonts"
-sys.path.insert(0, str(UI_DIR))
+sys.path.insert(0, str(UI_DIR.parents[1]))
 
 
 class PitchReplayTests(unittest.TestCase):
@@ -24,9 +24,9 @@ class PitchReplayTests(unittest.TestCase):
         os.chdir(UI_DIR)
         cls.addClassCleanup(os.chdir, cls.old_cwd)
         # Match the application's Qt/SDK DLL order, without constructing Model.
-        import main
+        import Src.UI_Control.main as main
         from PyQt5.QtWidgets import QApplication
-        import pitch_widget
+        import Src.UI_Control.widgets.pitch_widget as pitch_widget
         import numpy as np
         import pandas as pd
         cls.module, cls.np, cls.pd = pitch_widget, np, pd

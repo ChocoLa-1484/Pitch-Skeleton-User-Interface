@@ -8,6 +8,13 @@ Run from the repository root with an activated Pitcher environment:
 The 3D page can use PnP/8-point metric_stereo_v1 calibration; the additional
 measurement page provides manual pixel checks and auditable metric reports.
 """
+
+# Support both python -m and direct file execution from any working directory.
+import sys as _sys
+from pathlib import Path as _Path
+if __package__ in (None, ""):
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+
 import argparse
 import json
 import os
@@ -60,10 +67,10 @@ def check(options):
     if options.infer:
         import vispy
         vispy.use("pyqt5")
-        from main import Model
-    from cv_utils.metric_session import MetricSession, infer_annotations
-    from cv_utils.chessboard_metric import read_json
-    from cv_utils.stride_workflow import default_contact_frame
+        from Src.UI_Control.main import Model
+    from Src.analysis.metric_session import MetricSession, infer_annotations
+    from Src.calibration.chessboard_metric import read_json
+    from Src.analysis.stride_workflow import default_contact_frame
     try:
         frame = options.frame if options.frame is not None else default_contact_frame(options.video_dir)[0]
         session = MetricSession(options.calibration, options.video_dir, options.reference_frame,
@@ -93,7 +100,8 @@ def run_ui(options):
     if not options.measurement_only:
         import vispy
         vispy.use("pyqt5")
-    from metric_ui import MetricPanel
+        from Src.UI_Control.main import Main
+    from Src.UI_Control.widgets.metric_ui import MetricPanel
 
     app = QApplication(sys.argv)
     app.setFont(QFont("Microsoft JhengHei", 10))
@@ -103,8 +111,6 @@ def run_ui(options):
         window.setWindowTitle("棋盤校正｜同一後腳位移")
         window.resize(1420, 980)
     else:
-        from main import Main
-
         class MetricMain(Main):
             def init_tabs(self):
                 super().init_tabs()

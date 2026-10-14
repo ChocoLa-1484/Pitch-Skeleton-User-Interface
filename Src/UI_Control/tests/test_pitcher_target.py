@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from skeleton.pitcher_target import PitcherTargetSelector
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from Src.pose.pitcher_target import PitcherTargetSelector
 
 
 class PitcherTargetTests(unittest.TestCase):
@@ -83,7 +83,7 @@ class PitcherTargetTests(unittest.TestCase):
 class PitcherInferenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from skeleton import detect_skeleton
+        from Src.pose import detect_skeleton
         from mmengine.structures import InstanceData
         import torch
         cls.module, cls.instances, cls.torch = detect_skeleton, InstanceData, torch

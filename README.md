@@ -4,6 +4,8 @@
 
 > 開發者／維護者請另外參考 [DEVELOPMENT.md](docs/DEVELOPMENT.md)（環境問題排查、硬體細節、系統設計背景），相機校正細節見 [CALIBRATION.md](docs/CALIBRATION.md)。
 
+程式已依介面、校正、攝影機、骨架與分析分資料夾，舊版工具保留於 `Src/legacy/`；位置與新指令見[目錄說明](docs/PROJECT_LAYOUT.md)。主程式工具列新增「攝影機設定」，開啟相機後可分別調曝光、增益、白平衡，以及硬體支援的焦距／對焦。
+
 ## 安裝
 
 以下步驟會建立與實驗室主機**版本完全一致**的環境（2026-10-07 已在全新環境實測通過）。
@@ -104,12 +106,11 @@ python -c "import PySpin; s=PySpin.System.GetInstance(); cs=s.GetCameras(); prin
 
 ## 執行
 
-必須先切換到 `Src\UI_Control` 再執行（程式以相對路徑讀取設定與模型）：
+在專案根目錄執行（也可沿用進入 `Src\UI_Control` 後執行 `python main.py`）：
 
 ```
 conda activate Pitcher
-cd Src\UI_Control
-python main.py
+python Src/UI_Control/main.py
 ```
 
 也可以直接雙擊專案根目錄的 `start.bat`，它會自動啟動 Pitcher 環境並切換到正確目錄。

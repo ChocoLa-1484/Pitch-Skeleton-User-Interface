@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 UI_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(UI_DIR))
+sys.path.insert(0, str(UI_DIR.parents[1]))
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 os.environ.setdefault('CONDA_PREFIX', sys.prefix)
 os.environ['QT_QPA_FONTDIR'] = 'C:/Windows/Fonts'
@@ -22,13 +22,13 @@ class Video3DTests(unittest.TestCase):
         old = os.getcwd()
         os.chdir(UI_DIR)
         cls.addClassCleanup(os.chdir, old)
-        import main  # Match the application's DLL initialization order.
+        import Src.UI_Control.main as main
         import cv2
         import numpy as np
         import pandas as pd
-        import video_widget_2
+        import Src.UI_Control.widgets.video_widget_2 as video_widget_2
         from PyQt5.QtWidgets import QApplication
-        from metric_3d_viewer import MetricTriangulate3DViewer
+        from Src.UI_Control.viewers.metric_3d_viewer import MetricTriangulate3DViewer
         cls.cv2, cls.np, cls.pd = cv2, np, pd
         cls.module, cls.Viewer = video_widget_2, MetricTriangulate3DViewer
         cls.app = QApplication.instance() or QApplication([])

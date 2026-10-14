@@ -28,17 +28,16 @@ python .\Src\UI_Control\calibrate.py
 
 **8 顆粉紅球十字架的自動 HSV／PnP 外參**：執行 `python Src/UI_Control/calibrate.py --cross`。預設讀取 `intrinsic_20261008` 與 `Calibrate_Picture_Auto`，使用正面 SN24380115、側面 SN21055356，輸出毫米制外參、球號標註與品質報告到新的 `Db/Calibration/cross_pnp/<時間>/`。此功能不覆蓋現行 F 校正；世界座標、拍攝建議、量測限制與本批外參和現場位置的差異見 本文件第 4 節〈8 顆螢光粉球十字架〉。
 
-**只提取螢光粉球**：執行 `python Src/UI_Control/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 本文件第 5 節〈獨立螢光粉球提取〉。
+**只提取螢光粉球**：執行 `python Src/calibration/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 本文件第 5 節〈獨立螢光粉球提取〉。
 
 新入口以程式位置解析路徑，可從任意工作目錄啟動。舊有分步工具仍可使用：
 
 ```
-cd Src\UI_Control
-python calib.py                  # 1. 每台相機的內參，並指定正面／側面
-python main.py                   # 2.「2D 相機」分頁拍校正桿照片
-python 01_ball_detect_manual.py  # 3. 標註對應點
-python 02_ransac_8points.py      # 4. 計算 F 矩陣
-python 03_3d.py                  # 5.（選用）驗證
+python Src/UI_Control/calib.py                        # 1. 每台相機內參，並指定角色
+python Src/UI_Control/main.py                         # 2.「2D 相機」分頁拍校正桿照片
+python Src/legacy/calibration/01_ball_detect_manual.py # 3. 舊分步工具：標註
+python Src/legacy/calibration/02_ransac_8points.py      # 4. 舊分步工具：F 矩陣
+python Src/legacy/calibration/03_3d.py                 # 5.（選用）舊尺度驗證
 ```
 
 詳細步驟與注意事項見本文件第 2 節。
@@ -51,7 +50,7 @@ python 03_3d.py                  # 5.（選用）驗證
 
 - 全新內參每台至少 15 組，RMS 須 ≤ 1 px；覆蓋區域、傾斜角度等建議列在紀錄。保留原始棋盤格照片與 NPZ 角點，方便重算。
 - 外參照片至少 4 組、每張 6 點，正面與側面必須同名；拍照與標註都在同一視窗。左右 1–6 必須對應同一實體球心。滾輪縮放、Ctrl＋拖曳平移、右鍵撤銷。最後一張不必再切換即可保存。
-- `cv_utils/calibration_workflow.py` 提供驗證、RANSAC、內點重估、誤差與發布處理。F 方向維持 `x_front^T F x_side = 0`，固定隨機種子；至少 12 內點且比例 ≥ 50% 才接受。門檻預設 3 px、可調，**誤差採左右兩側點到對極線距離的較大值**，與舊 `02` 的單側 1 px 門檻不同，比較報告時須使用一致門檻與資料。
+- `Src/calibration/calibration_workflow.py` 提供驗證、RANSAC、內點重估、誤差與發布處理。F 方向維持 `x_front^T F x_side = 0`，固定隨機種子；至少 12 內點且比例 ≥ 50% 才接受。門檻預設 3 px、可調，**誤差採左右兩側點到對極線距離的較大值**，與舊 `02` 的單側 1 px 門檻不同，比較報告時須使用一致門檻與資料。
 - 目前 3D 消費端使用原始像素；本工具也維持 `raw_pixels` 的 F，未單獨對外參點去畸變，以免座標系不一致。若日後改成去畸變的棋盤格外參，須同步修改重建端。擬合誤差不能代替獨立尺寸／3D 精度驗證；這版未自動完成舊步驟 6 的 340 mm 尺度驗證。
 - `sessions/<時間>_wand/` 包含 `session.json`（角色、內參快照、棋盤格規格、狀態）、`cf/`、`cs/`、`selected_points_cf.json`、`selected_points_cs.json`、`intrinsic/`、`report.json`。點位逐次保存為草稿，中途取消不改現用值。草稿保留供檢查，尚未提供重開精靈後的自動續作。
 - 發布前備份被取代的檔案到 session 的 `previous_calibration/`，逐檔以暫存檔取代；遇一般寫入例外會回復本次已取代檔案。這不是跨檔案的斷電交易，請勿同時開多個校正工具寫入。既有錄影快照不受影響。
@@ -72,15 +71,15 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 | 步驟 | 執行 | 要接什麼 | 產出 |
 |---|---|---|---|
-| 1. 內參（每台各做一次） | `python calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
+| 1. 內參（每台各做一次） | `python Src/UI_Control/calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
 | 2. 指定正面/側面 | `calib.py` 第 4 區 → 儲存角色 | — | `camera_roles.json` |
-| 3. 拍外參照片 | `python main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Record\Calibrate_Picture\cf\`、`cs\` |
-| 4. 標註對應點 | `python 01_ball_detect_manual.py`（先正面再側面，每張 6 點，滾輪換張） | — | `extrinsic\selected_points_cf.json`、`_cs.json` |
-| 5. 算 F 矩陣 | `python 02_ransac_8points.py` | — | `extrinsic\fundamental.json` |
-| 6. 驗證 | `python 03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
+| 3. 拍外參照片 | `python Src/UI_Control/main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Record\Calibrate_Picture\cf\`、`cs\` |
+| 4. 標註對應點 | `python Src/legacy/calibration/01_ball_detect_manual.py`（先正面再側面，每張 6 點，滾輪換張） | — | `extrinsic\selected_points_cf.json`、`_cs.json` |
+| 5. 算 F 矩陣 | `python Src/legacy/calibration/02_ransac_8points.py` | — | `extrinsic\fundamental.json` |
+| 6. 驗證 | `python Src/legacy/calibration/03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
 
 **注意事項**
-- 以上都要在 `Src\UI_Control` 底下執行
+- 上方命令從專案根目錄執行；舊分步工具已移到 `Src/legacy/calibration/`。目錄對照見 [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md)。
 - 相機序號不再寫死：`cv_thread.py` 依序採用「呼叫端指定 → `camera_roles.json` → 舊版 `camera_serials.json` → 自動偵測 → 預設值」
 - `01` 每次執行會從空白開始並覆蓋 JSON。若只是打開看看就關掉，會把結果清空（2026-10-07 演練時發生過）
 - `02` 每次跑出的 F 會略有不同（RANSAC 隨機抽樣，未固定種子）
@@ -109,14 +108,14 @@ python -m unittest discover -s Src/UI_Control/tests -v
 conda activate Pitcher
 
 # 1. 只算內參、畸變與角點檢測
-python Src/UI_Control/calibrate_chessboard.py
+python Src/calibration/calibrate_chessboard.py
 
 # 2. 只算外參：讀取上一步內參，分別輸出 PnP 與 8-point
-python Src/UI_Control/calibrate_chessboard_extrinsic.py --method both
+python Src/calibration/calibrate_chessboard_extrinsic.py --method both
 
 # 3. 量測：讀取已存的外參，不再重算校正
-python Src/UI_Control/measure_stride_pnp.py
-python Src/UI_Control/measure_stride_8point.py
+python Src/tools/measure_stride_pnp.py
+python Src/tools/measure_stride_8point.py
 ```
 
 亦可用 `conda run --no-capture-output -n Pitcher python ...`。本機直接呼叫環境內 `python.exe` 而未啟用 Conda，可能在 OpenCV PnP 遇到 DLL 延遲載入錯誤；上述兩種方式已驗證。
@@ -126,8 +125,8 @@ python Src/UI_Control/measure_stride_8point.py
 外參預設沿用內參資料夾的角點；也可另指定**同棋盤規格、相同相機／鏡頭設定與解析度**的同步照片，左右放在 `cf`、`cs` 並以同名配對。相機位置須與待分析影片一致，多個棋盤位置需保持兩台相機不動：
 
 ```powershell
-python Src/UI_Control/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard --images "D:/外參棋盤照片" --output Db/Calibration/chessboard_new_rig --method both
-python Src/UI_Control/measure_stride_pnp.py --stereo Db/Calibration/chessboard_new_rig/pnp/stereo.json --annotate
+python Src/calibration/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard --images "D:/外參棋盤照片" --output Db/Calibration/chessboard_new_rig --method both
+python Src/tools/measure_stride_pnp.py --stereo Db/Calibration/chessboard_new_rig/pnp/stereo.json --annotate
 ```
 
 外參的 `--output` 是輸出根目錄，其下依方法建立 `pnp`／`8point`；`--images` 產生的角點另存 `extrinsic_detections.json`，不覆寫內參角點。量測的 `--stereo` 可直接指定外參檔，省略時讀取 `--calibration` 下的 `<方法>/stereo.json`；缺檔會提示先執行外參命令。量測才會輸出影片幀圖，沒有量測點時 `run_status.json` 為 `needs_annotations`。
@@ -136,10 +135,10 @@ python Src/UI_Control/measure_stride_pnp.py --stereo Db/Calibration/chessboard_n
 
 ```powershell
 # 115 是目視檢查起始值，可在視窗逐幀調整精確落地時刻
-python Src/UI_Control/measure_stride_pnp.py --annotate --reference-frame 0 --frame 115 --heel right --ground-plane
+python Src/tools/measure_stride_pnp.py --annotate --reference-frame 0 --frame 115 --heel right --ground-plane
 
 # 完全相同的選點用另一條路徑比較
-python Src/UI_Control/measure_stride_8point.py --annotations Db/Calibration/chessboard/pnp/annotations.json
+python Src/tools/measure_stride_8point.py --annotations Db/Calibration/chessboard/pnp/annotations.json
 ```
 
 視窗依序要求：
@@ -175,7 +174,7 @@ CS 既有骨架的核對線索如下，單位為原始像素，**不是厘米量
 有完整骨架時可執行：
 
 ```powershell
-python Src/UI_Control/measure_stride_pnp.py --pose-annotations --reference-frame 0 --frame 115 --heel right
+python Src/tools/measure_stride_pnp.py --pose-annotations --reference-frame 0 --frame 115 --heel right
 ```
 
 它讀取確切 `frame_number`、HALPE-26 腳跟索引、信心值 ≥0.5，同幀只能一人。這組資料 CF 缺 115 幀，會明確拒絕，請用 `--annotate`。模型腳跟與鞋底實際接觸點仍可能有誤差。
@@ -225,9 +224,9 @@ CF 的 fx/fy 約 1.097，且部分雙目重投影超過 3 px，已記錄警告�
 若確認 fx/fy 比例，可明確指定：
 
 ```powershell
-python Src/UI_Control/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
-python Src/UI_Control/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard_square_pixels --method both
-python Src/UI_Control/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
+python Src/calibration/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
+python Src/calibration/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard_square_pixels --method both
+python Src/tools/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
 ```
 
 同批檢測重擬合內參可加 `--reuse-detections`，僅限影像內容與 `--pattern` 未變。內參命令的 `--max-views` 控制內參取樣，外參命令的 `--max-pairs` 控制雙目取樣；量測命令不再接受 `--max-pairs`。`--preview-every 0` 關閉角點預覽。
@@ -266,9 +265,9 @@ conda activate Pitcher
 python Src/UI_Control/calibrate.py --cross
 ```
 
-也可以執行 `python Src/UI_Control/calibrate_cross.py`。`--help` 列出所有參數；離線功能不需要相機 SDK、Qt 或骨架模型。原本 `calibrate.py` 不加參數仍開啟原校正精靈。
+也可以執行 `python Src/calibration/calibrate_cross.py`。`--help` 列出所有參數；離線功能不需要相機 SDK、Qt 或骨架模型。原本 `calibrate.py` 不加參數仍開啟原校正精靈。
 
-只需提取螢光粉球時，使用獨立入口 `python Src/UI_Control/extract_fluorescent_balls.py`。單張／資料夾輸入、HSV 參數與球心輸出見 本文件第 5 節〈獨立螢光粉球提取〉；此入口不讀內參，也不執行 PnP。
+只需提取螢光粉球時，使用獨立入口 `python Src/calibration/extract_fluorescent_balls.py`。單張／資料夾輸入、HSV 參數與球心輸出見 本文件第 5 節〈獨立螢光粉球提取〉；此入口不讀內參，也不執行 PnP。
 
 本次使用者確認的預設值：
 
@@ -370,10 +369,10 @@ ROI 範例針對本批照片的位置；之後拍攝必須重新檢查。少於 
 `P_undistorted_pixels = K @ [R | t]` 只能搭配 `cv2.undistortPoints(..., P=K)` 得到的去畸變像素。另有 `triangulate_world()`，會先去畸變成正規化座標，再用兩台 `[R | t]` 三角化，直接回傳上述世界座標的毫米值：
 
 ```python
-# 將 Src/UI_Control 加入 Python import 路徑後使用
+# 從專案根目錄使用
 import json
 import numpy as np
-from cv_utils.cross_calibration import triangulate_world, ground_distance_mm
+from Src.calibration.cross_calibration import triangulate_world, ground_distance_mm
 
 with open("Db/Calibration/cross_pnp/<本次時間>/extrinsics.json", encoding="utf-8") as f:
     result = json.load(f)
@@ -432,8 +431,8 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ## 5. 獨立螢光粉球提取
 
-入口：`Src/UI_Control/extract_fluorescent_balls.py`。
-核心：`Src/UI_Control/cv_utils/fluorescent_balls.py`。
+入口：`Src/calibration/extract_fluorescent_balls.py`。
+核心：`Src/calibration/fluorescent_balls.py`。
 
 只需要 OpenCV 與 NumPy，不讀內參，不計算 PnP，不載入 Qt、相機 SDK 或骨架模型。現有 `calibrate_cross.py` 共用同一個偵測核心，避免兩套 HSV 方法產生不同結果。
 
@@ -443,15 +442,15 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ```powershell
 conda activate Pitcher
-python Src/UI_Control/extract_fluorescent_balls.py
+python Src/calibration/extract_fluorescent_balls.py
 ```
 
 單張照片、單一相機或其他資料夾皆可，不要求 cf/cs 配對。資料夾會遞迴搜尋；保留來源子目錄結構，檔名包含原始副檔名，避免同名 JPG/PNG 衝突。
 
 ```powershell
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf/01.jpg
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cs
-python Src/UI_Control/extract_fluorescent_balls.py --input "D:/新照片" --output "D:/提取結果/run01"
+python Src/calibration/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf/01.jpg
+python Src/calibration/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cs
+python Src/calibration/extract_fluorescent_balls.py --input "D:/新照片" --output "D:/提取結果/run01"
 ```
 
 預設輸出至新的 `Db/Record/Ball_Extraction/<時間>/`。自訂輸出目錄必須尚不存在，且不能放在輸入資料夾內，以免下次把遮罩和標註圖當成來源照片。
@@ -459,7 +458,7 @@ python Src/UI_Control/extract_fluorescent_balls.py --input "D:/新照片" --outp
 ### 調整 HSV 與 ROI
 
 ```powershell
-python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf --roi 800 650 350 350 --h-min 135 --h-max 168 --s-min 105 --v-min 50
+python Src/calibration/extract_fluorescent_balls.py --input Db/Record/Calibrate_Picture_Auto/cf --roi 800 650 350 350 --h-min 135 --h-max 168 --s-min 105 --v-min 50
 ```
 
 - OpenCV 8-bit HSV：H=0–179，S/V=0–255。預設 H=135–168、S≥105、V≥50 是從現有照片調出的起點，新光源與曝光下應查看遮罩再調整。
@@ -490,10 +489,10 @@ python Src/UI_Control/extract_fluorescent_balls.py --input Db/Record/Calibrate_P
 
 ### 從其他程式呼叫
 
-在 `Src/UI_Control` 可被 Python import 的環境中：
+從專案根目錄（`Src` 可被 Python import 的環境）使用：
 
 ```python
-from cv_utils.fluorescent_balls import DetectionConfig, detect_balls, read_image
+from Src.calibration.fluorescent_balls import DetectionConfig, detect_balls, read_image
 
 image = read_image("照片.png")
 config = DetectionConfig(hue_min=135, hue_max=168, saturation_min=105, value_min=50)

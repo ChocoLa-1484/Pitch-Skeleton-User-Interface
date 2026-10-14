@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import cv2
 import numpy as np
@@ -17,7 +17,7 @@ class CalibrationPhotoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with patch.dict(sys.modules, {'PySpin': MagicMock()}):
-            import calib
+            import Src.UI_Control.calib as calib
         cls.calib = calib
         cls.app = calib.QApplication.instance() or calib.QApplication([])
 

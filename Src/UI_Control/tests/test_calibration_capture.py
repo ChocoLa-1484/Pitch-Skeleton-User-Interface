@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import numpy as np
 
@@ -17,8 +17,8 @@ class CalibrationCaptureTests(unittest.TestCase):
         sdk_patch = patch.dict(sys.modules, {"PySpin": MagicMock()})
         sdk_patch.start()
         cls.addClassCleanup(sdk_patch.stop)
-        import calib
-        import calibrate
+        import Src.UI_Control.calib as calib
+        import Src.UI_Control.calibrate as calibrate
         cls.calib = calib
         cls.gui = calibrate
         cls.app = calibrate.QApplication.instance() or calibrate.QApplication([])

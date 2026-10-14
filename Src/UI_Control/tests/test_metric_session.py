@@ -10,10 +10,10 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cv_utils.chessboard_metric import read_json, write_json
-from cv_utils.metric_session import CONVENTION, MetricSession, load_rig
-from cv_utils import stride_workflow
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from Src.calibration.chessboard_metric import read_json, write_json
+from Src.analysis.metric_session import CONVENTION, MetricSession, load_rig
+from Src.analysis import stride_workflow
 
 
 class MetricSessionTests(unittest.TestCase):
@@ -65,11 +65,11 @@ class MetricSessionTests(unittest.TestCase):
         write_json(annotations_path, self.annotations())
         before = self.rig_path.read_bytes()
         output = self.root / 'measurement'
-        argv = ['measure_stride_pnp.py', '--stereo', str(self.rig_path),
+        argv = ['Src.tools.measure_stride_pnp.py', '--stereo', str(self.rig_path),
                 '--video-dir', str(self.root), '--output', str(output),
                 '--annotations', str(annotations_path)]
         with patch.object(sys, 'argv', argv), \
-             patch('cv_utils.chessboard_extrinsic.fit_chessboard_rig',
+             patch('Src.calibration.chessboard_extrinsic.fit_chessboard_rig',
                    side_effect=AssertionError('Measurement must not recalibrate')):
             stride_workflow.main('pnp')
         self.assertEqual(self.rig_path.read_bytes(), before)
@@ -81,7 +81,7 @@ class MetricSessionTests(unittest.TestCase):
 
     def test_missing_or_wrong_method_rig_is_rejected_before_measurement(self):
         output = self.root / 'measurement'
-        argv = ['measure_stride_pnp.py', '--calibration', str(self.root / 'missing'),
+        argv = ['Src.tools.measure_stride_pnp.py', '--calibration', str(self.root / 'missing'),
                 '--output', str(output)]
         with patch.object(sys, 'argv', argv):
             with self.assertRaisesRegex(FileNotFoundError, 'calibrate_chessboard_extrinsic.py'):

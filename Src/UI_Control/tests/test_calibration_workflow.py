@@ -9,11 +9,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import cv2
 import numpy as np
-from cv_utils import calibration_workflow as workflow
+from Src.calibration import calibration_workflow as workflow
 
 
 def sample_data(outliers=False):
@@ -114,7 +114,7 @@ class StorageTests(unittest.TestCase):
             workflow.publish_calibration(root, session, tuple(entries), entries, report,
                                          {"cf": front, "cs": side})
             self.assertEqual((session / "previous_calibration/camera_roles.json").read_bytes(), before)
-            from cv_utils import calib_store
+            from Src.calibration import calib_store
             with patch.multiple(calib_store, ROLES_JSON=str(roles_path),
                                 INTRINSICS_JSON=str(root / "intrinsic/intrinsics_all.json"),
                                 FUNDAMENTAL_JSON=str(root / "extrinsic/fundamental.json")):
@@ -127,13 +127,13 @@ class StorageTests(unittest.TestCase):
 class GuiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import calibrate
+        import Src.UI_Control.calibrate as calibrate
         # The camera SDK is mocked; these tests exercise Qt/OpenCV and lifecycle,
         # not physical cameras or the vendor's native DLL loader.
         sdk_patch = patch.dict(sys.modules, {"PySpin": MagicMock()})
         sdk_patch.start()
         cls.addClassCleanup(sdk_patch.stop)
-        import calib
+        import Src.UI_Control.calib as calib
         cls.gui = calibrate
         cls.app = calibrate.QApplication.instance() or calibrate.QApplication([])
 
@@ -195,7 +195,7 @@ class GuiTests(unittest.TestCase):
                 window.close()
 
     def test_both_intrinsics_are_staged_before_publication(self):
-        import calib
+        import Src.UI_Control.calib as calib
         from unittest.mock import Mock
         camera = Mock()
         camera.get_grayscale_image.return_value = (False, None)

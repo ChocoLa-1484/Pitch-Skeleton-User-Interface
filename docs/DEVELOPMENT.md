@@ -90,7 +90,7 @@ pip install --force-reinstall --no-deps opencv-python==4.8.1.78
 
 **成因**：`utils\model.py` 中的模型設定檔路徑使用相對路徑（如 `..\mmyolo_main\configs\...`），這些路徑假設程式是從 `Src\UI_Control` 目錄本身執行的。若從專案根目錄執行 `python Src\UI_Control\main.py`，相對路徑解析基準不同，會找不到檔案。
 
-**解法**：務必先 `cd Src\UI_Control` 再執行 `python main.py`。
+**目前解法（2026-10-14）**：模型與相機設定改用 `Src/paths.py` 的絕對資源路徑，可從專案根目錄執行 `python Src/UI_Control/main.py`。模組已依功能拆分，詳見 [PROJECT_LAYOUT.md](PROJECT_LAYOUT.md)。
 
 ### FLIR SDK（PySpin）為隱性必要相依套件
 
@@ -134,7 +134,7 @@ pip install --force-reinstall --no-deps opencv-python==4.8.1.78
 
 ### GUI 分頁與即時操作的實際對應關係
 
-依交接文件《交接程式操作文件_Ui》第 10 節：**`Src/UI_Control/camera_widget.py`（「2D 相機」分頁）目前入口未啟用**，是獨立於主流程之外的備用實作。真正的雙攝影機即時操作、自動投球偵測、自動錄影，是整合在 **「2D」分頁**（`PosePitchTabControl`，即 `pitch_widget.py`）裡的 `cameraCheckBox`（開啟相機）/`startPitchCheckBox`（開始投球）等控制項。
+依交接文件《交接程式操作文件_Ui》第 10 節：**`Src/UI_Control/widgets/camera_widget.py`（「2D 相機」分頁）目前入口未啟用**，是獨立於主流程之外的備用實作。真正的雙攝影機即時操作、自動投球偵測、自動錄影，是整合在 **「2D」分頁**（`PosePitchTabControl`，即 `pitch_widget.py`）裡的 `cameraCheckBox`（開啟相機）/`startPitchCheckBox`（開始投球）等控制項。
 
 雙視角畫面的左右對應（追蹤自 `cv_thread.py` → `DualFlirSystem.get_grayscale_images()` → `pitch_widget.py updateFrame()`，並經論文原文「介面左上方提供正面攝影機與側面攝影機之同步播放畫面」交叉驗證）：
 

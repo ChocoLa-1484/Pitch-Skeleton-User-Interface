@@ -9,13 +9,13 @@ import tempfile
 import unittest
 
 UI_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(UI_DIR))
+sys.path.insert(0, str(UI_DIR.parents[1]))
 
 import cv2
 import numpy as np
 
-import extract_fluorescent_balls as extraction
-from cv_utils.fluorescent_balls import detect_balls, read_image, write_image
+import Src.calibration.extract_fluorescent_balls as extraction
+from Src.calibration.fluorescent_balls import detect_balls, read_image, write_image
 
 
 def three_balls():
@@ -29,16 +29,16 @@ class ExtractionTests(unittest.TestCase):
     def test_imports_without_calibration_and_preserves_existing_api(self):
         code = """
 import sys
-import extract_fluorescent_balls
-assert 'cv_utils.cross_calibration' not in sys.modules
-assert 'cv_utils.calibration_workflow' not in sys.modules
+from Src.calibration import extract_fluorescent_balls
+assert 'Src.calibration.cross_calibration' not in sys.modules
+assert 'Src.calibration.calibration_workflow' not in sys.modules
 assert 'PyQt5' not in sys.modules
 assert 'PySpin' not in sys.modules
 """
-        completed = subprocess.run([sys.executable, "-c", code], cwd=str(UI_DIR),
+        completed = subprocess.run([sys.executable, "-c", code], cwd=str(UI_DIR.parents[1]),
                                    capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        from cv_utils import cross_calibration
+        from Src.calibration import cross_calibration
         self.assertIs(cross_calibration.detect_balls, detect_balls)
         old_config = cross_calibration.DetectionConfig(135, 168, 105, 50, 3, 20, 2500, 24)
         old_config.validate()

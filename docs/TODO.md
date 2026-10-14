@@ -10,7 +10,16 @@
 > **接手的 AI 請先讀這一段。** 這裡記錄「上一位助手做到哪、下一步該做什麼」，每完成一個階段性步驟就會更新。
 > 若此區塊顯示「無進行中任務」，代表上一段工作已告一段落，可直接從下方待辦清單挑選。
 
-**更新時間**：2026-10-13
+**更新時間**：2026-10-14
+
+**UI_Control 分層與主程式攝影機設定（2026-10-14，完成）**
+- 使用者授權依功能分資料夾、更新路徑，將舊版／重複功能獨立保留，並在 main.py 加入曝光、焦距與顏色設定。
+- 已遷移至 Src/{calibration,cameras,analysis,pose,rapsodo,common,tools,legacy}；UI 留下入口、widgets/forms/rendering/viewers/controllers。統一 Src.* 匯入與 Src/paths.py 資源路徑，舊目錄只剩快取的部分已清理，trt_cache 保留。
+- 使用者原有 calibrate_cross.py、chessboard_metric.py 預設資料集與 CALIBRATION.md 照片表格修改保留；遷移前快照位於系統暫存 pitch_ui_migration。
+- 共用硬體控制／主程式工具列及設定視窗已完成，10 項模擬硬體／Qt 測試通過；曝光、增益、白平衡讀回再保存，存檔失敗還原，鏡頭依可寫節點開放，錄影／斷線禁止套用。未改相機內參矩陣模擬焦距。
+- 逐檔測試共 119 項：118 通過，1 項 P05 實錄仍因影片 1920×1084 與目前內參 1920×1080 不符而拒收（既有資料問題）。校正／照片／球偵測／量測、投手選人、2D 回放與 3D 合成測試通過。逐檔日誌在 local/layout_validation/；全套同程序執行會遇到本機 OpenCV／Qt／torch DLL 順序限制 WinError 182，應逐檔測試。
+- 主視窗四頁與設定入口完成 smoke（模型／相機模擬，未推論或控制實體鏡頭）、main_metric 輕量模式啟動成功；9 個 CLI 以其他工作目錄啟動 --help 通過，活動模組 import／字型／設定資源路徑檢查通過。操作與新目錄見 docs/PROJECT_LAYOUT.md，舊版與缺件清單見 Src/legacy/README.md。
+- 使用者 2026-10-14 要求直接延續，沒有待核准事項。下一步由使用者連相機核對實際可寫控制；手動鏡頭不支援電子焦距／對焦，需手動調鏡頭環。實體距離量測仍需與錄影匹配的校正檔。
 
 **【棋盤格內參／外參／量測拆分（2026-10-13）】**
 - 使用者要求分開棋盤格內外參。內參保留 calibrate_chessboard.py；新增 calibrate_chessboard_extrinsic.py，提供 pnp／8point／both，讀取既有內參與角點，或用 --images 另讀同規格同步棋盤照片。輸出沿用 metric_stereo_v1，無需投球影片。
@@ -372,7 +381,7 @@
 
 **證據顯示新版曾實際運作過**：`Src/UI_Control/trt_cache/` 內有兩個約 330MB 的 TensorRT engine 檔（`*_sm120.engine`），是編譯後的推論引擎快取，代表 ONNX 模型確實被載入執行過。
 
-**關於缺件**：`ViTPose_26kpts_fixed.onnx` 是姿態估測模型（26 關節點，對應 HALPE-26）。它應是由 `vitpose_Sk26.pth`（1.18GB，仍在）**轉檔**產生，而非另外訓練——專案內有 `Src/UI_Control/pth2onnx.py` 這支轉檔工具。因此若要啟用新架構，是「重新轉檔」而非「重新訓練」，成本可控。
+**關於缺件**：`ViTPose_26kpts_fixed.onnx` 是姿態估測模型（26 關節點，對應 HALPE-26）。它應是由 `vitpose_Sk26.pth`（1.18GB，仍在）**轉檔**產生，而非另外訓練——專案內有 `Src/legacy/experiments/pth2onnx.py` 這支轉檔工具。因此若要啟用新架構，是「重新轉檔」而非「重新訓練」，成本可控。
 
 **待評估**：是否要完成這次遷移。效益是推論速度（ONNX+TensorRT 通常顯著快於 PyTorch），成本是需重新轉檔、驗證分析結果一致性、並確認 ultralytics 追蹤行為與現行 mmdet 是否等價。
 

@@ -4,6 +4,13 @@
 相機固定後，依畫面指示移動棋盤格／校正桿；左右影像均依相同順序點 6 個球心。
 本工具不載入 YOLO / ViTPose。既有 calib.py、01、02 工具仍可獨立使用。
 """
+
+# Support both python -m and direct file execution from any working directory.
+import sys as _sys
+from pathlib import Path as _Path
+if __package__ in (None, ""):
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+
 import os
 from pathlib import Path
 import shutil
@@ -13,10 +20,11 @@ from datetime import datetime
 
 # Offline eight-ball workflow is available before loading Qt/camera dependencies.
 if __name__ == "__main__" and "--cross" in sys.argv:
-    from calibrate_cross import main as cross_main
+    from Src.calibration.calibrate_cross import main as cross_main
     sys.exit(cross_main([argument for argument in sys.argv[1:] if argument != "--cross"]))
 
 UI_DIR = Path(__file__).resolve().parent
+from Src.paths import CAMERA_CONFIG_DIR
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 qt_plugins = Path(os.environ.get("CONDA_PREFIX", sys.prefix)) / "Library/plugins/platforms"
 if qt_plugins.is_dir():
@@ -33,8 +41,8 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from cv_utils import calib_store
-from cv_utils.calibration_workflow import (
+from Src.calibration import calib_store
+from Src.calibration.calibration_workflow import (
     MIN_PAIRS, estimate_wand_fundamental, match_image_pairs,
     publish_calibration, save_json, validate_intrinsic, validate_roles,
 )
@@ -81,10 +89,10 @@ class CaptureWorker(QThread):
     def run(self):
         cameras = []
         try:
-            from camera_objects.single_camera.flir_camera_system import FlirCameraSystem
-            from camera_objects.two_cameras.dual_flir_system import DualFlirSystem
+            from Src.cameras.single_camera.flir_camera_system import FlirCameraSystem
+            from Src.cameras.two_cameras.dual_flir_system import DualFlirSystem
             for sn, config in zip(self.roles, ("GH3_camera_config.yaml", "GH3_camera_config_2.yaml")):
-                camera = FlirCameraSystem(str(UI_DIR / "camera_config" / config), sn)
+                camera = FlirCameraSystem(str(CAMERA_CONFIG_DIR / config), sn)
                 cameras.append(camera)
             pair = DualFlirSystem(*cameras)
             failures = 0
@@ -337,7 +345,7 @@ class CalibrationWindow(QMainWindow):
             self.log("既有校正檔無法讀取：{}".format(exc))
         connected = []
         try:
-            from calib import list_cameras
+            from Src.UI_Control.calib import list_cameras
             connected = sorted({sn for sn, _ in list_cameras()})
         except Exception as exc:
             message = "無法掃描相機；可輸入序號並使用既有內參與照片：{}".format(exc)
@@ -434,7 +442,7 @@ class CalibrationWindow(QMainWindow):
         })
 
     def begin_intrinsic(self, role_index):
-        import calib
+        import Src.UI_Control.calib as calib
         sample_dir = self.session / "intrinsic" / ("images_SN" + self.roles[role_index])
         sample_dir.mkdir(parents=True, exist_ok=True)
 
@@ -469,7 +477,7 @@ class CalibrationWindow(QMainWindow):
                     super().keyPressEvent(event)
 
         # The legacy collector is reused; only this new process's config is changed.
-        calib.CONFIG_PATH = str(UI_DIR / "camera_config" /
+        calib.CONFIG_PATH = str(CAMERA_CONFIG_DIR /
                                 ("GH3_camera_config.yaml" if role_index == 0 else "GH3_camera_config_2.yaml"))
         self.state = "intrinsic_{}".format(role_index)
         self.panel = Collector()
@@ -819,7 +827,7 @@ def main():
     # Load native camera dependencies before starting Qt and calculation workers.
     # Missing SDK is still handled by the camera scan UI.
     try:
-        import calib  # noqa: F401
+        import Src.UI_Control.calib as calib
     except ImportError:
         pass
     app = QApplication(sys.argv)
