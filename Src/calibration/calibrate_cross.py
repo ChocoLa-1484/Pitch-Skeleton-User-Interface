@@ -71,7 +71,7 @@ def annotated_image(image, candidates, pose, error=None, detect_only=False):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--images", type=Path, default=ROOT / "Db/Record/Calibrate_Picture_Auto")
+    parser.add_argument("--images", type=Path, default=ROOT / "Db/Record/Calibrate_Picture_Cross")
     parser.add_argument("--intrinsics", type=Path,
                         default=ROOT / "Db/Calibration/intrinsic_20261008/intrinsics_all.json")
     parser.add_argument("--front-sn", default="24380115")

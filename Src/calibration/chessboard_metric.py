@@ -14,7 +14,7 @@ from scipy.optimize import least_squares
 from Src.paths import ROOT_DIR as ROOT
 DEFAULT_IMAGES = ROOT / "Db/Record/Calibrate_Picture_Chessboard"
 DEFAULT_CALIBRATION = ROOT / "Db/Calibration/chessboard"
-DEFAULT_VIDEO = ROOT / "Db/Record/20261008_Pitcher01/20261008_1130_P05"
+DEFAULT_VIDEO = ROOT / "Db/Record/20261008_Pitcher02/20261008_1050_P03"
 
 
 def write_json(path, value):

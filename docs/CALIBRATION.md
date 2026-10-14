@@ -274,7 +274,7 @@ python Src/UI_Control/calibrate.py --cross
 | 項目 | 設定 |
 | --- | --- |
 | 內參 | `Db/Calibration/intrinsic_20261008/intrinsics_all.json` |
-| 照片 | `Db/Record/Calibrate_Picture_Auto`，cf、cs 各 10 張同名照片 |
+| 照片 | `Db/Record/Calibrate_Picture_Chessboard`，cf、cs 各 10 張同名照片 |
 | cf 正面 | SN24380115 |
 | cs 側面 | SN21055356 |
 | 照片大小 | 1920 × 1084，必須和內參一致 |
