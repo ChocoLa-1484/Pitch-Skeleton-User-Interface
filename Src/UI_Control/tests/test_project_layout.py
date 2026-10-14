@@ -13,7 +13,8 @@ sys.path.insert(0, str(ROOT))
 class ProjectLayoutTests(unittest.TestCase):
     def test_resources_stay_in_repository_and_current_data_directory(self):
         from Src.paths import CAMERA_CONFIG_DIR, DB_DIR, UI_DIR
-        from Src.calibration import calib_store, chessboard_metric
+        from Src.calibration import calib_store
+        from Src.calibration.chessboard_cross import chessboard_metric
         self.assertEqual(DB_DIR, ROOT / 'Db')
         self.assertEqual(Path(calib_store.CALIB_DIR), DB_DIR / 'Calibration')
         self.assertEqual(chessboard_metric.DEFAULT_CALIBRATION, DB_DIR / 'Calibration/chessboard')
@@ -41,15 +42,15 @@ class ProjectLayoutTests(unittest.TestCase):
 
     def test_cli_entrypoints_work_from_an_unrelated_working_directory(self):
         commands = [
-            ['Src/calibration/calibrate_chessboard.py', '--help'],
-            ['Src/calibration/calibrate_chessboard_extrinsic.py', '--help'],
-            ['Src/calibration/calibrate_cross.py', '--help'],
-            ['Src/calibration/extract_fluorescent_balls.py', '--help'],
+            ['Src/calibration/chessboard_cross/calibrate_chessboard.py', '--help'],
+            ['Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py', '--help'],
+            ['Src/calibration/chessboard_cross/calibrate_cross.py', '--help'],
+            ['Src/calibration/chessboard_cross/extract_fluorescent_balls.py', '--help'],
             ['Src/tools/measure_stride_pnp.py', '--help'],
             ['Src/tools/measure_stride_8point.py', '--help'],
             ['Src/tools/extract_frame.py', '--help'],
             ['Src/UI_Control/main_metric.py', '--help'],
-            ['Src/UI_Control/calibrate.py', '--cross', '--help'],
+            ['Src/calibration/calibrate.py', '--cross', '--help'],
         ]
         with tempfile.TemporaryDirectory() as cwd:
             for command in commands:

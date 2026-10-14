@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from Src.calibration.calibration_workflow import validate_intrinsic
-from Src.calibration.fluorescent_balls import DetectionConfig as HSVDetectionConfig, detect_balls
+from Src.calibration.chessboard_cross.fluorescent_balls import DetectionConfig as HSVDetectionConfig, detect_balls
 
 
 @dataclass

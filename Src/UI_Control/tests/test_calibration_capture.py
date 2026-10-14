@@ -17,8 +17,8 @@ class CalibrationCaptureTests(unittest.TestCase):
         sdk_patch = patch.dict(sys.modules, {"PySpin": MagicMock()})
         sdk_patch.start()
         cls.addClassCleanup(sdk_patch.stop)
-        import Src.UI_Control.calib as calib
-        import Src.UI_Control.calibrate as calibrate
+        import Src.calibration.calib as calib
+        import Src.calibration.calibrate as calibrate
         cls.calib = calib
         cls.gui = calibrate
         cls.app = calibrate.QApplication.instance() or calibrate.QApplication([])

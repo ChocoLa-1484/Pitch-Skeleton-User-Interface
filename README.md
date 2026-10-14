@@ -4,7 +4,7 @@
 
 > 開發者／維護者請另外參考 [DEVELOPMENT.md](docs/DEVELOPMENT.md)（環境問題排查、硬體細節、系統設計背景），相機校正細節見 [CALIBRATION.md](docs/CALIBRATION.md)。
 
-程式已依介面、校正、攝影機、骨架與分析分資料夾，舊版工具保留於 `Src/legacy/`；位置與新指令見[目錄說明](docs/PROJECT_LAYOUT.md)。主程式工具列新增「攝影機設定」，開啟相機後可分別調曝光、增益、白平衡，以及硬體支援的焦距／對焦。
+程式已依介面、校正、攝影機、骨架與分析分資料夾，舊版工具保留於 `Src/legacy/`；位置與新指令見[DEVELOPMENT.md〈程式目錄與攝影機設定〉](docs/DEVELOPMENT.md)。主程式工具列新增「攝影機設定」，開啟相機後可分別調曝光、增益、白平衡，以及硬體支援的焦距／對焦。
 
 ## 安裝
 
@@ -130,10 +130,16 @@ python Src/UI_Control/main.py
 
 ```powershell
 conda activate Pitcher
-python .\Src\UI_Control\calibrate.py
+python .\Src\calibration\calibrate.py
 ```
 
 按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。
+
+**RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參。第一次使用前需安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
+
+1. 執行上面的 `calibrate.py`，勾選「只做內參」後按「開始校正」，完成兩台內參（不必拍校正桿）。
+2. 雙擊專案根目錄的 `start_roma.bat`。
+3. 按「加入資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 
 其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
 
@@ -150,6 +156,7 @@ Db\                      ← 不在 git 裡
         ├─ *_BRandRapsodo.json        球離手與 Rapsodo 資料
         └─ calibration.json           錄影當下的校正值
 environment\             環境版本鎖定檔
-Src\UI_Control\          主程式
+Src\UI_Control\          主程式視窗
+Src\calibration\         校正工具（chessboard_cross：棋盤格／十字架、roma：RoMa 外參）
 docs\                    開發文件
 ```

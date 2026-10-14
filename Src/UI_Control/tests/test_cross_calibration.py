@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import cv2
 import numpy as np
 
-import Src.calibration.calibrate_cross as cli
-from Src.calibration import cross_calibration as cross
+import Src.calibration.chessboard_cross.calibrate_cross as cli
+from Src.calibration.chessboard_cross import cross_calibration as cross
 
 
 def camera_at(center):

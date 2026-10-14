@@ -69,7 +69,7 @@ def check(options):
         vispy.use("pyqt5")
         from Src.UI_Control.main import Model
     from Src.analysis.metric_session import MetricSession, infer_annotations
-    from Src.calibration.chessboard_metric import read_json
+    from Src.calibration.chessboard_cross.chessboard_metric import read_json
     from Src.analysis.stride_workflow import default_contact_frame
     try:
         frame = options.frame if options.frame is not None else default_contact_frame(options.video_dir)[0]

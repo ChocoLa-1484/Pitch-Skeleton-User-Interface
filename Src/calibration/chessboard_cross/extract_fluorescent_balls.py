@@ -8,7 +8,7 @@ cf/cs folders. Candidate IDs are image-local, NOT physical ball1..ball8 IDs.
 import sys as _sys
 from pathlib import Path as _Path
 if __package__ in (None, ""):
-    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
 import argparse
 from dataclasses import asdict
@@ -20,9 +20,9 @@ import sys
 import cv2
 import numpy as np
 
-from Src.calibration.fluorescent_balls import DetectionConfig, detect_balls, read_image, write_image
+from Src.calibration.chessboard_cross.fluorescent_balls import DetectionConfig, detect_balls, read_image, write_image
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 

@@ -7,9 +7,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from Src.calibration.chessboard_metric import (DEFAULT_CALIBRATION, DEFAULT_VIDEO,
+from Src.calibration.chessboard_cross.chessboard_metric import (DEFAULT_CALIBRATION, DEFAULT_VIDEO,
     read_json, save_image, triangulate, write_json)
-from Src.calibration.chessboard_extrinsic import load_rig
+from Src.calibration.chessboard_cross.chessboard_extrinsic import load_rig
 
 
 def find_videos(folder):
@@ -336,7 +336,7 @@ def main(method):
     rig_path = args.stereo or args.calibration / method / "stereo.json"
     if not rig_path.is_file():
         raise FileNotFoundError(
-            f"Missing {rig_path}; run python Src/calibration/calibrate_chessboard_extrinsic.py --method {method} first")
+            f"Missing {rig_path}; run python Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py --method {method} first")
     result = load_rig(rig_path)
     if result['method'] != method:
         raise ValueError(f"Expected a {method} rig, got {result['method']}")

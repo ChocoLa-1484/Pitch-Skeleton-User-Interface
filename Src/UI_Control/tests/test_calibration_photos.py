@@ -17,7 +17,7 @@ class CalibrationPhotoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with patch.dict(sys.modules, {'PySpin': MagicMock()}):
-            import Src.UI_Control.calib as calib
+            import Src.calibration.calib as calib
         cls.calib = calib
         cls.app = calib.QApplication.instance() or calib.QApplication([])
 

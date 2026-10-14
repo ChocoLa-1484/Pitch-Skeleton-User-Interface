@@ -34,7 +34,8 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QTextEdit,
                              QComboBox, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QMessageBox, QFileDialog, QLineEdit, QProgressDialog)
+                             QMessageBox, QFileDialog, QLineEdit, QProgressDialog,
+                             QCheckBox)
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 
@@ -147,6 +148,23 @@ class CalibWindow(QMainWindow):
         board_layout.addWidget(self.spn_square)
         board_layout.addStretch()
         layout.addWidget(board_group)
+
+        # 鏡頭：用標稱焦距檢查 fx 是否合理；長焦鏡頭鎖住畸變，避免估出不合理的畸變係數
+        lens_group = QGroupBox("鏡頭（選填）")
+        lens_layout = QHBoxLayout(lens_group)
+        self.spn_focal = QDoubleSpinBox()
+        self.spn_focal.setRange(0.0, 500.0)
+        self.spn_focal.setDecimals(1)
+        self.spn_focal.setSpecialValueText("未填")
+        self.spn_focal.setSuffix(" mm")
+        self.chk_lock_dist = QCheckBox("長焦：鎖住畸變（畸變係數固定為 0）")
+        self.spn_focal.valueChanged.connect(
+            lambda v: self.chk_lock_dist.setChecked(v >= self.TELEPHOTO_MM))
+        lens_layout.addWidget(QLabel("鏡頭焦距:"))
+        lens_layout.addWidget(self.spn_focal)
+        lens_layout.addWidget(self.chk_lock_dist)
+        lens_layout.addStretch()
+        layout.addWidget(lens_group)
 
         self.photo_group = QGroupBox("從照片校正（不需連接相機，每次選一台相機的資料夾）")
         photo_layout = QHBoxLayout(self.photo_group)
@@ -496,6 +514,9 @@ class CalibWindow(QMainWindow):
     MIN_SAMPLES = 15             # 建議樣本數
     MIN_TILT_DEG = 20.0          # 至少要有一組傾斜超過此角度
     DUPLICATE_SHIFT_PX = 5.0     # 與上一組平均位移小於此值視為重複
+    PIXEL_SIZE_MM = 0.00586      # GS3-U3-23S6C 像素大小 5.86 µm，用來把鏡頭焦距換算成 fx
+    TELEPHOTO_MM = 25.0          # 焦距達此值自動勾選「鎖住畸變」
+    FX_TOLERANCE = 0.15          # fx 與焦距推算值相差超過 15% 就警告
     REGION_NAMES = ["左上", "上", "右上", "左", "中", "右", "左下", "下", "右下"]
 
     def _coverage(self):
@@ -512,8 +533,14 @@ class CalibWindow(QMainWindow):
 
     def _calibrate(self):
         """執行校正並計算每組樣本的誤差與傾斜角"""
+        flags = 0
+        if self.chk_lock_dist.isChecked():
+            # 長焦鏡頭視角窄、幾乎沒有畸變，照片裡沒有足夠資訊估畸變，
+            # 放著不鎖會估出不合理的係數（2026-10-08 正面 50 mm 的 k2 = 33.5），去畸變時反而把影像扭曲
+            flags = (cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3
+                     | cv2.CALIB_ZERO_TANGENT_DIST)
         rms, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(
-            self.objpoints, self.imgpoints, self.image_size, None, None
+            self.objpoints, self.imgpoints, self.image_size, None, None, flags=flags
         )
         per_image_rms = []
         tilts = []
@@ -526,9 +553,17 @@ class CalibWindow(QMainWindow):
             tilts.append(float(np.degrees(np.arccos(min(1.0, abs(R[2, 2]))))))
         return rms, mtx, dist, np.array(per_image_rms), np.array(tilts)
 
-    def _assess(self, rms, per_image_rms, tilts):
+    def _assess(self, rms, per_image_rms, tilts, mtx=None):
         """依門檻判斷品質，回傳 (結論, 問題清單, 異常樣本索引)"""
         problems = []
+        # RMS 小不代表 fx 對：長焦時 fx 與距離可以互相抵消，RMS 照樣很小，所以另外用鏡頭焦距檢查
+        focal = self.spn_focal.value()
+        if mtx is not None and focal > 0:
+            expected = focal / self.PIXEL_SIZE_MM
+            ratio = mtx[0, 0] / expected
+            if abs(ratio - 1) > self.FX_TOLERANCE:
+                problems.append(f"fx={mtx[0, 0]:.0f}，與 {focal:g} mm 鏡頭推算的 {expected:.0f} 相差 "
+                                f"{(ratio - 1) * 100:+.0f}%：請確認鏡頭焦距，並讓板子往上下、左右不同方向傾斜 30° 以上（只朝同一方向轉會讓 fx 算不準）")
         bad = [i for i, e in enumerate(per_image_rms)
                if e > self.RMS_MAX and e > 2 * rms]
 
@@ -571,7 +606,7 @@ class CalibWindow(QMainWindow):
         QApplication.processEvents()
 
         rms, mtx, dist, per_image_rms, tilts = self._calibrate()
-        verdict, problems, bad = self._assess(rms, per_image_rms, tilts)
+        verdict, problems, bad = self._assess(rms, per_image_rms, tilts, mtx)
 
         # 有異常樣本時，詢問是否剔除後重算
         if bad and self.captured_count - len(bad) >= 10:
@@ -591,7 +626,7 @@ class CalibWindow(QMainWindow):
                 self.log(f"已剔除 {len(bad)} 組異常樣本，剩 {self.captured_count} 組，重新計算...")
                 QApplication.processEvents()
                 rms, mtx, dist, per_image_rms, tilts = self._calibrate()
-                verdict, problems, bad = self._assess(rms, per_image_rms, tilts)
+                verdict, problems, bad = self._assess(rms, per_image_rms, tilts, mtx)
 
         # 結果合成一則訊息，避免「最新在上」時多行順序顛倒
         report = (
@@ -662,6 +697,8 @@ class CalibWindow(QMainWindow):
             "pattern": [self.spn_cols.value(), self.spn_rows.value()],
             "square_size_mm": self.spn_square.value(),
             "sample_count": self.captured_count,
+            "distortion_locked": self.chk_lock_dist.isChecked(),
+            "lens_focal_mm": self.spn_focal.value() or None,
             "calibrated_at": datetime.now().isoformat(timespec="seconds"),
         }
         if self._photo_paths:

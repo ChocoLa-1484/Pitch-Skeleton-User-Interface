@@ -4,12 +4,12 @@
 import sys as _sys
 from pathlib import Path as _Path
 if __package__ in (None, ""):
-    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
 import argparse
 from pathlib import Path
 import cv2
-from Src.calibration.chessboard_metric import (DEFAULT_IMAGES, DEFAULT_CALIBRATION,
+from Src.calibration.chessboard_cross.chessboard_metric import (DEFAULT_IMAGES, DEFAULT_CALIBRATION,
     calibrate_intrinsics, detect_folder, object_points, read_json, write_json)
 
 
@@ -53,7 +53,7 @@ def main():
             print(f"  REVIEW: {warning}")
         write_json(args.output / "intrinsics.json", result)
     print(f"Saved: {args.output / 'intrinsics.json'}")
-    print('Next: python Src/calibration/calibrate_chessboard_extrinsic.py --calibration <this output directory>')
+    print('Next: python Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py --calibration <this output directory>')
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """單一入口：兩台棋盤格內參 → 校正桿雙機拍照 → 標註 → 外參。
 
-啟動：python Src/UI_Control/calibrate.py（可從任何工作目錄執行）
+啟動：python Src/calibration/calibrate.py（可從任何工作目錄執行）
 相機固定後，依畫面指示移動棋盤格／校正桿；左右影像均依相同順序點 6 個球心。
 本工具不載入 YOLO / ViTPose。既有 calib.py、01、02 工具仍可獨立使用。
 """
@@ -20,7 +20,7 @@ from datetime import datetime
 
 # Offline eight-ball workflow is available before loading Qt/camera dependencies.
 if __name__ == "__main__" and "--cross" in sys.argv:
-    from Src.calibration.calibrate_cross import main as cross_main
+    from Src.calibration.chessboard_cross.calibrate_cross import main as cross_main
     sys.exit(cross_main([argument for argument in sys.argv[1:] if argument != "--cross"]))
 
 UI_DIR = Path(__file__).resolve().parent
@@ -44,7 +44,7 @@ from PyQt5.QtWidgets import (
 from Src.calibration import calib_store
 from Src.calibration.calibration_workflow import (
     MIN_PAIRS, estimate_wand_fundamental, match_image_pairs,
-    publish_calibration, save_json, validate_intrinsic, validate_roles,
+    publish_calibration, publish_intrinsics, save_json, validate_intrinsic, validate_roles,
 )
 
 
@@ -257,6 +257,8 @@ class CalibrationWindow(QMainWindow):
         form.addRow(self.scan_status)
         self.reuse = QCheckBox("沿用這兩台已有內參，只重做外參（鏡頭、焦距、解析度須相同）")
         form.addRow(self.reuse)
+        self.intrinsic_only = QCheckBox("只做內參（外參改用 RoMa：start_roma.bat，不拍校正桿）")
+        form.addRow(self.intrinsic_only)
         self.cols, self.rows = QSpinBox(), QSpinBox()
         for spin, value in ((self.cols, 8), (self.rows, 11)):
             spin.setRange(3, 30)
@@ -345,7 +347,7 @@ class CalibrationWindow(QMainWindow):
             self.log("既有校正檔無法讀取：{}".format(exc))
         connected = []
         try:
-            from Src.UI_Control.calib import list_cameras
+            from Src.calibration.calib import list_cameras
             connected = sorted({sn for sn, _ in list_cameras()})
         except Exception as exc:
             message = "無法掃描相機；可輸入序號並使用既有內參與照片：{}".format(exc)
@@ -407,6 +409,8 @@ class CalibrationWindow(QMainWindow):
     def start_session(self):
         roles = (self.front_combo.currentText().strip(), self.side_combo.currentText().strip())
         validate_roles(*roles)
+        if self.reuse.isChecked() and self.intrinsic_only.isChecked():
+            raise ValueError("「沿用已有內參」與「只做內參」只能擇一。")
         entries = {}
         if self.reuse.isChecked():
             stored = calib_store.load_intrinsics()
@@ -434,7 +438,8 @@ class CalibrationWindow(QMainWindow):
 
     def persist_session(self, status):
         save_json(self.session / "session.json", {
-            "method": "wand_manual_ransac", "front": self.roles[0], "side": self.roles[1],
+            "method": "intrinsic_only" if self.intrinsic_only.isChecked() else "wand_manual_ransac",
+            "front": self.roles[0], "side": self.roles[1],
             "status": status, "intrinsics": self.entries,
             "pattern": [self.cols.value(), self.rows.value()], "square_size_mm": self.square.value(),
             "threshold_px": self.threshold.value(), "image_names": self.names,
@@ -442,7 +447,7 @@ class CalibrationWindow(QMainWindow):
         })
 
     def begin_intrinsic(self, role_index):
-        import Src.UI_Control.calib as calib
+        import Src.calibration.calib as calib
         sample_dir = self.session / "intrinsic" / ("images_SN" + self.roles[role_index])
         sample_dir.mkdir(parents=True, exist_ok=True)
 
@@ -556,7 +561,7 @@ class CalibrationWindow(QMainWindow):
     def intrinsic_finished(self, result):
         rms, K, dist, errors, tilts = result
         panel = self.panel
-        verdict, problems, _ = panel._assess(rms, errors, tilts)
+        verdict, problems, _ = panel._assess(rms, errors, tilts, K)
         if not np.isfinite(rms) or rms > panel.RMS_MAX:
             raise ValueError("內參 RMS {:.3f} px，須低於或等於 {} px。請清空樣本後改善光線、清晰度再拍。"
                              .format(rms, panel.RMS_MAX))
@@ -570,6 +575,7 @@ class CalibrationWindow(QMainWindow):
             "pattern": [self.cols.value(), self.rows.value()], "square_size_mm": self.square.value(),
             "sample_count": panel.captured_count, "calibrated_at": datetime.now().isoformat(timespec="seconds"),
             "sample_images": ["intrinsic/images_SN{}/{}".format(sn, name) for name in panel.sample_files],
+            "distortion_locked": panel.chk_lock_dist.isChecked(), "lens_focal_mm": panel.spn_focal.value() or None,
         }
         validate_intrinsic(entry)
         np.savez(str(self.session / "intrinsic" / ("calib_SN{}.npz".format(sn))),
@@ -584,8 +590,25 @@ class CalibrationWindow(QMainWindow):
         self.dispose_panel()
         if role_index == 0:
             self.begin_intrinsic(1)
+        elif self.intrinsic_only.isChecked():
+            self.finish_intrinsic_only()
         else:
             self.begin_capture()
+
+    def finish_intrinsic_only(self):
+        """兩台內參完成就發布（內參＋正面／側面角色），不拍校正桿；外參之後用 RoMa 計算。"""
+        publish_intrinsics(calib_store.CALIB_DIR, self.session, self.roles, self.entries,
+                           datetime.now().isoformat(timespec="seconds"))
+        self.state = "done"
+        try:
+            self.persist_session("complete")
+        except OSError as exc:
+            self.log("內參已套用，但工作階段狀態無法更新：{}".format(exc))
+        self.instructions.setText("內參完成，已更新 Db/Calibration。外參請雙擊 start_roma.bat，用當天的錄影計算。")
+        self.log("兩台內參與正面／側面角色已更新；外參（fundamental.json）沒有改動，若相機有移動請用 RoMa 重新計算。")
+        self.log("照片與內參樣本：{}".format(self.session))
+        self.next_button.setText("開始另一次校正")
+        self.cancel_button.setEnabled(False)
 
     def begin_capture(self):
         self.state = "capture"
@@ -827,7 +850,7 @@ def main():
     # Load native camera dependencies before starting Qt and calculation workers.
     # Missing SDK is still handled by the camera scan UI.
     try:
-        import Src.UI_Control.calib as calib
+        import Src.calibration.calib as calib
     except ImportError:
         pass
     app = QApplication(sys.argv)

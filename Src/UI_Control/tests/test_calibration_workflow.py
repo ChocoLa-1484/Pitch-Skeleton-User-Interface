@@ -124,16 +124,37 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(calibration["front"], "front123")
 
 
+class IntrinsicOnlyTests(unittest.TestCase):
+    def test_publish_intrinsics_keeps_extrinsic_and_backs_up_roles(self):
+        _, _, entry = sample_data()
+        entries = {"front123": entry, "side456": entry}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = root / "sessions/test"
+            session.mkdir(parents=True)
+            (root / "camera_roles.json").write_text('{"front":"old","side":"rig"}', encoding="utf-8")
+            fundamental = root / "extrinsic/fundamental.json"
+            fundamental.parent.mkdir(parents=True)
+            fundamental.write_text('{"F": "unchanged"}', encoding="utf-8")
+            workflow.publish_intrinsics(root, session, ("front123", "side456"), entries, "2026-10-14T00:00:00")
+            roles = json.loads((root / "camera_roles.json").read_text(encoding="utf-8"))
+            self.assertEqual((roles["front"], roles["side"]), ("front123", "side456"))
+            stored = json.loads((root / "intrinsic/intrinsics_all.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(stored), {"front123", "side456"})
+            self.assertEqual(fundamental.read_text(encoding="utf-8"), '{"F": "unchanged"}')
+            self.assertTrue((session / "previous_calibration/camera_roles.json").exists())
+
+
 class GuiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import Src.UI_Control.calibrate as calibrate
+        import Src.calibration.calibrate as calibrate
         # The camera SDK is mocked; these tests exercise Qt/OpenCV and lifecycle,
         # not physical cameras or the vendor's native DLL loader.
         sdk_patch = patch.dict(sys.modules, {"PySpin": MagicMock()})
         sdk_patch.start()
         cls.addClassCleanup(sdk_patch.stop)
-        import Src.UI_Control.calib as calib
+        import Src.calibration.calib as calib
         cls.gui = calibrate
         cls.app = calibrate.QApplication.instance() or calibrate.QApplication([])
 
@@ -195,7 +216,7 @@ class GuiTests(unittest.TestCase):
                 window.close()
 
     def test_both_intrinsics_are_staged_before_publication(self):
-        import Src.UI_Control.calib as calib
+        import Src.calibration.calib as calib
         from unittest.mock import Mock
         camera = Mock()
         camera.get_grayscale_image.return_value = (False, None)

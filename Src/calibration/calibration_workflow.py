@@ -171,6 +171,29 @@ def publish_calibration(calib_dir, session, roles, entries, report, points):
         "extrinsic/selected_points_cs.json": json_bytes(points["cs"]),
         "extrinsic/fundamental.json": json_bytes(report),
     }
+    _write_with_backup(calib_dir, session, roles, outputs)
+    return report
+
+
+def publish_intrinsics(calib_dir, session, roles, entries, updated_at):
+    """只發布兩台內參與正面／側面角色（外參另用 RoMa 等方法計算）；同樣先備份、出錯還原。"""
+    front, side = roles
+    validate_roles(front, side)
+    for sn in roles:
+        validate_intrinsic(entries[sn])
+    calib_dir, session = Path(calib_dir), Path(session)
+    intrinsics_path = calib_dir / "intrinsic/intrinsics_all.json"
+    existing = json.loads(intrinsics_path.read_text(encoding="utf-8")) if intrinsics_path.exists() else {}
+    existing.update(entries)
+    outputs = {
+        "camera_roles.json": json_bytes({"front": front, "side": side, "updated_at": updated_at}),
+        "intrinsic/intrinsics_all.json": json_bytes(existing),
+    }
+    _write_with_backup(calib_dir, session, roles, outputs)
+
+
+def _write_with_backup(calib_dir, session, roles, outputs):
+    """寫入校正檔：先把要被取代的舊檔備份到 session/previous_calibration，任何一檔失敗就全部還原。"""
     for sn in roles:
         name = "intrinsic/calib_SN{}.npz".format(sn)
         if (session / name).exists():
@@ -193,4 +216,3 @@ def publish_calibration(calib_dir, session, roles, entries, report, points):
             else:
                 atomic_write(calib_dir / name, originals[name])
         raise
-    return report

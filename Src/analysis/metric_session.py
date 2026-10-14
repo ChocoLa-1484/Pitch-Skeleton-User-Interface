@@ -7,8 +7,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from Src.calibration.chessboard_metric import write_json
-from Src.calibration.chessboard_extrinsic import CONVENTION, load_rig
+from Src.calibration.chessboard_cross.chessboard_metric import write_json
+from Src.calibration.chessboard_cross.chessboard_extrinsic import CONVENTION, load_rig
 from Src.analysis.stride_workflow import (annotation_template, annotations_from_pose, find_videos,
                               measure_annotations, save_measurement, video_frame)
 

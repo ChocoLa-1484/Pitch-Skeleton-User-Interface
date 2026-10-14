@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout,
     QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
-from Src.calibration.chessboard_metric import read_json
+from Src.calibration.chessboard_cross.chessboard_metric import read_json
 from Src.analysis.metric_session import MetricSession, infer_annotations
 from Src.analysis.stride_workflow import default_contact_frame
 

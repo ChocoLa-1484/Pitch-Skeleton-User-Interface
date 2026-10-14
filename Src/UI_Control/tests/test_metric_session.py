@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from Src.calibration.chessboard_metric import read_json, write_json
+from Src.calibration.chessboard_cross.chessboard_metric import read_json, write_json
 from Src.analysis.metric_session import CONVENTION, MetricSession, load_rig
 from Src.analysis import stride_workflow
 
@@ -69,7 +69,7 @@ class MetricSessionTests(unittest.TestCase):
                 '--video-dir', str(self.root), '--output', str(output),
                 '--annotations', str(annotations_path)]
         with patch.object(sys, 'argv', argv), \
-             patch('Src.calibration.chessboard_extrinsic.fit_chessboard_rig',
+             patch('Src.calibration.chessboard_cross.chessboard_extrinsic.fit_chessboard_rig',
                    side_effect=AssertionError('Measurement must not recalibrate')):
             stride_workflow.main('pnp')
         self.assertEqual(self.rig_path.read_bytes(), before)

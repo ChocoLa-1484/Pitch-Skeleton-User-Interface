@@ -4,7 +4,7 @@
 import sys as _sys
 from pathlib import Path as _Path
 if __package__ in (None, ""):
-    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
 import argparse
 from dataclasses import asdict
@@ -17,14 +17,14 @@ import sys
 import cv2
 import numpy as np
 
-from Src.calibration.cross_calibration import (
+from Src.calibration.chessboard_cross.cross_calibration import (
     DetectionConfig, camera_parameters, detect_balls, fit_static_camera,
     label_and_solve, object_points, rotation_difference_deg, stereo_geometry,
     triangulate_world,
 )
-from Src.calibration.fluorescent_balls import read_image, write_image
+from Src.calibration.chessboard_cross.fluorescent_balls import read_image, write_image
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 

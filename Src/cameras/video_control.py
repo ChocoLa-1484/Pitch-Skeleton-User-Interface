@@ -247,13 +247,16 @@ class VideoLoader:
             video_path, _ = QFileDialog.getOpenFileName(None, "Select Video File", "", "Video Files (*.mp4 *.avi);;All Files (*)", options=options)
             if not video_path:
                 return
-            # 自動推斷 video_path_2
+            # 自動推斷另一支：不論選 CS 或 CF，都整理成「第一支 CS（側面）、第二支 CF（正面）」，
+            # 3D 計算固定把第一支當側面套 K_S，順序反了內參就會套錯
             folder = os.path.dirname(video_path)
             basename = os.path.basename(video_path)
             if basename.startswith("CS"):
                 video_path_2 = os.path.join(folder, "CF" + basename[2:])
+            elif basename.startswith("CF") and os.path.exists(os.path.join(folder, "CS" + basename[2:])):
+                video_path, video_path_2 = os.path.join(folder, "CS" + basename[2:]), video_path
+                print(f"[影片] 選的是正面，已自動改為先載入側面：{os.path.basename(video_path)}")
             else:
-                # 若不是C1開頭，可自行定義規則
                 video_path_2 = None
         if not video_path_2 or not os.path.exists(video_path_2):
             # 若自動推斷失敗，則手動選取

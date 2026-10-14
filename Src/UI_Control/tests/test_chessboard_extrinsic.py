@@ -10,9 +10,9 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-import Src.calibration.calibrate_chessboard_extrinsic as cli
-from Src.calibration.chessboard_extrinsic import fit_chessboard_rig, load_rig
-from Src.calibration.chessboard_metric import object_points, read_json, write_json
+import Src.calibration.chessboard_cross.calibrate_chessboard_extrinsic as cli
+from Src.calibration.chessboard_cross.chessboard_extrinsic import fit_chessboard_rig, load_rig
+from Src.calibration.chessboard_cross.chessboard_metric import object_points, read_json, write_json
 
 
 class ChessboardExtrinsicTests(unittest.TestCase):

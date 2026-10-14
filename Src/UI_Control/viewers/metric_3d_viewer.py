@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from Src.analysis.analysis_io import atomic_json
-from Src.calibration.chessboard_metric import triangulate
+from Src.calibration.chessboard_cross.chessboard_metric import triangulate
 from Src.analysis.metric_session import load_rig, DEFINITION
 from Src.UI_Control.viewers.triangulate_3d_viewer import Triangulate3DViewer
 

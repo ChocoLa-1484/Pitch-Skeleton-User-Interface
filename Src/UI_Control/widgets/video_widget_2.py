@@ -35,7 +35,7 @@ import time
 from Src.analysis.keyframe_export import SimpleKeyframeLogger
 from Src.calibration import calib_store
 from Src.analysis.analysis_io import atomic_json, read_optional_json
-from Src.calibration.chessboard_metric import DEFAULT_CALIBRATION
+from Src.calibration.chessboard_cross.chessboard_metric import DEFAULT_CALIBRATION
 from Src.analysis.metric_session import load_rig
 from Src.UI_Control.viewers.metric_3d_viewer import MetricTriangulate3DViewer
 from Src.analysis.analyze import PoseAnalyzer as PoseAnalyzer2D

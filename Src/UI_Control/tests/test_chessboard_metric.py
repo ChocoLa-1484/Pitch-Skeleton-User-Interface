@@ -9,10 +9,10 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from Src.calibration.chessboard_metric import (align_pairs, board_edges, camera_arrays,
+from Src.calibration.chessboard_cross.chessboard_metric import (align_pairs, board_edges, camera_arrays,
     estimate_eight_point, fit_eight_point, fit_pnp, object_points, triangulate)
 from Src.analysis.stride_workflow import measure_annotations, pose_heel
-from Src.calibration.chessboard_metric import detect_folder
+from Src.calibration.chessboard_cross.chessboard_metric import detect_folder
 
 
 class ChessboardDetectionTests(unittest.TestCase):
@@ -34,9 +34,9 @@ class ChessboardDetectionTests(unittest.TestCase):
             root = Path(folder)
             for image_id in (1, 2, 3):
                 (root / f'{image_id}.png').touch()
-            with patch('Src.calibration.chessboard_metric.read_image', side_effect=lambda p:
+            with patch('Src.calibration.chessboard_cross.chessboard_metric.read_image', side_effect=lambda p:
                        np.full((240, 320, 3), int(p.stem), np.uint8)), \
-                 patch('Src.calibration.chessboard_metric.cv2.findChessboardCornersSB', side_effect=detect):
+                 patch('Src.calibration.chessboard_cross.chessboard_metric.cv2.findChessboardCornersSB', side_effect=detect):
                 result = detect_folder(root, (7, 7), root / 'previews', preview_every=0)
             self.assertFalse((root / 'previews').exists())
 
@@ -97,7 +97,7 @@ class MetricGeometryTests(unittest.TestCase):
         self.assertLess(info["stereo_rms_px"], .001)
 
     def test_eight_point_recovers_scale_without_pnp_pose(self):
-        with patch("Src.calibration.chessboard_metric.solve_board_pose", side_effect=AssertionError("PnP must not fit 8point pose/scale")):
+        with patch("Src.calibration.chessboard_cross.chessboard_metric.solve_board_pose", side_effect=AssertionError("PnP must not fit 8point pose/scale")):
             R, t, info = fit_eight_point(self.pairs, self.cameras, (7, 7), 100.)
         np.testing.assert_allclose(R, self.R, atol=1e-4)
         np.testing.assert_allclose(t, self.t, atol=.1)
