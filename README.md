@@ -136,7 +136,7 @@ python .\Src\UI_Control\calibration\main\calibrate.py
 
 **RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參。第一次使用前需安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
 
-1. 內參先用 `calib.py` 校正兩台相機，並在第 4 區指定正面／側面（`calibrate.py` 要走完校正桿流程才會存內參）。
+1. 內參先用 `calib.py` 校正兩台相機（`conda activate Pitcher` 後執行 `python .\Src\UI_Control\calibration\main\calib.py`），並在第 4 區指定正面／側面。`calibrate.py` 要走完校正桿流程才會存內參，所以這裡用 `calib.py`。
 2. 雙擊專案根目錄的 `start_roma.bat`。
 3. 按「加入資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 
