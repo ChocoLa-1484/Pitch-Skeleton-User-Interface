@@ -94,7 +94,7 @@ class ImageDrawer():
         if img is None:
             return
         image = img.copy()
-        curr_person_df = self.pose_estimater.getPersonDf(frame_num = frame_num, is_select=False)
+        curr_person_df = self.pose_estimater.getPersonDf(frame_num = frame_num, is_select=True)
         has_person = curr_person_df is not None and not curr_person_df.empty
         
         if countdown_time is not None:
@@ -734,7 +734,8 @@ class ImageDrawer():
         circle_size = max(1, min(image.shape[:2]) // 160)  # ToDo Shape it taking into account the size of the detection
         # circle_size = max(2, int(np.sqrt(np.max(np.max(points, axis=0) - np.min(points, axis=0)) // 16)))
         for i, pt in enumerate(points):
-
+            if not np.isfinite(pt[:3]).all():
+                continue
             unlabel = False if pt[0] != 0 and pt[1] != 0 else True
             is_smoothed_fallback = (len(pt) > 3 and float(pt[3]) > 0.0)
             if (pt[2] > confidence_threshold or is_smoothed_fallback) and not unlabel:
@@ -776,6 +777,8 @@ class ImageDrawer():
         
         for i, joint in enumerate(skeleton):
             pt1, pt2 = points[joint]
+            if not np.isfinite([pt1[:3], pt2[:3]]).all():
+                continue
             pt1_unlabel = False if pt1[0] != 0 and pt1[1] != 0 else True
             pt2_unlabel = False if pt2[0] != 0 and pt2[1] != 0 else True
             

@@ -494,6 +494,8 @@ class PoseEstimater:
         if person_df.empty:
             return
         self.person_df = person_df
+        self.person_data = person_df.to_dict('records')
+        self.pre_person_df = person_df[person_df.frame_number == person_df.frame_number.max()].copy()
         self.processed_frames = {frame_num for frame_num in self.person_df['frame_number']}
         # 從既有資料重建幀號快取（此路徑不經過 mergePersonData）
         self.person_df_by_frame = {

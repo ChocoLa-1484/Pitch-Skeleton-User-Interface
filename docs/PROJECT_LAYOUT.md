@@ -47,9 +47,18 @@ python Src/tools/measure_stride_8point.py
 
 ## 驗證
 
+2D 回放左側保留原始影片，右側預設顯示已儲存的人體骨架；「重新分析」完成後自動儲存 JSON，不需要另外儲存。兩頁均可點選 FC／MER／BR 標題按鈕或縮圖，暫停並跳到對應幀，影片框大小保持不變。3D 統一使用「載入影片」：選取同一次投球的 CF 或 CS 原始影片後，自動配對另一視角，沿用相同來源、校正、骨架與幀偏移的完整分析；找不到可用結果時逐幀分析並自動儲存，再開始回放。播放與拖曳不會觸發辨識或改寫 JSON。
+
+3D 的「校正設定」可調整校正方式、校正檔與同步偏移；按「套用設定」後重新檢查快取。「關鍵幀」頁可把目前畫面設為 FC、MER 或 BR，修正後自動儲存，並檢查 FC < MER < BR。按「重新分析」會清除手動關鍵幀，以新判定結果寫入 JSON。
+
+2D 與 3D 共用 `Src/analysis/pitch_events.py`：從 CS 側面骨架估計前腳支撐高度，FC 須接近地面且連續穩定；MER 只在抬臂、手腕高於肩部及手肘的後擺階段尋找最大值，排除低手後擺。左右投使用對應關節，閾值依腿長與 FPS 調整。MER／BR 是影像動作候選幀，不等同於直接量測肩關節旋轉或球離手。P02、P03、P04 作為本次回歸資料；P05 依使用者說明排除。
+
+兩頁骨架共用繪圖方法與信心門檻。3D 優先讀取同一份 2D JSON；`pose_replay.py` 將已儲存的回放幀號轉回來源幀，再套用目前偏移。新分析會附帶每部影片的 `_pose_timeline.json`，避免單影片與雙影片的舊事件檔混淆骨架幀號。2D 骨架更新後，3D 快取會失效並重新分析。公制重建仍需要影片尺寸與校正內參一致，尺寸不同會顯示實際值並保留原有資料，不會自動拉伸影像套用校正。
+
 ```powershell
 conda run -n Pitcher --no-capture-output python -m unittest discover -s Src/UI_Control/tests -p test_camera_settings.py -v
 conda run -n Pitcher --no-capture-output python -m unittest discover -s Src/UI_Control/tests -p test_pitch_replay.py -v
+conda run -n Pitcher --no-capture-output python -m unittest Src.UI_Control.tests.test_pitch_events Src.UI_Control.tests.test_video_3d_replay -v
 ```
 
 相機設定測試使用模擬節點與暫存 YAML，不會改實體相機。實際鏡頭的電子對焦支援仍以連線後顯示為準。

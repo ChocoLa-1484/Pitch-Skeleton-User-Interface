@@ -25,7 +25,10 @@ if getattr(sys, 'frozen', False):
 else:
     application_path = os.path.dirname(__file__)
 
-class ImageDrawer():
+from Src.UI_Control.rendering.vis_image import ImageDrawer as SkeletonImageDrawer
+
+
+class ImageDrawer(SkeletonImageDrawer):
     def __init__(self, pose_estimater: PoseEstimater=None, pose_analyzer:PoseAnalyzer=None, angle_name:str = "右手肘",angle_name2:str="右腋窩"):
         self.font_path = os.path.join(application_path, 'R-PMingLiU-TW-2.ttf')
         self.fontStyle = ImageFont.truetype(self.font_path, 20)
@@ -715,141 +718,6 @@ class ImageDrawer():
 
         return img
 
-
-    def drawPoints(self, image, points, person_idx, color_palette='gist_rainbow', palette_samples=10, confidence_threshold=0.3):
-        """
-        Draws `points` on `image`.
-
-        Args:
-            image: image in opencv format
-            points: list of points to be drawn.
-                Shape: (nof_points, 3)
-                Format: each point should contain (y, x, confidence)
-            color_palette: name of a matplotlib color palette
-                Default: 'tab20'
-            palette_samples: number of different colors sampled from the `color_palette`
-                Default: 16
-            confidence_threshold: only points with a confidence higher than this threshold will be drawn. Range: [0, 1]
-                Default: 0.5
-
-        Returns:
-            A new image with overlaid points
-
-        """
-        # 使用緩存的顏色，避免每次都重新計算
-        colors = self._get_colors(color_palette, palette_samples)
-
-        circle_size = max(1, min(image.shape[:2]) // 160)  # ToDo Shape it taking into account the size of the detection
-        # circle_size = max(2, int(np.sqrt(np.max(np.max(points, axis=0) - np.min(points, axis=0)) // 16)))
-        for i, pt in enumerate(points):
-        
-            unlabel = False if pt[0] != 0 and pt[1] != 0 else True
-            if pt[2] > confidence_threshold and not unlabel:
-                image = cv2.circle(image, (int(pt[1]), int(pt[0])), circle_size, tuple(colors[person_idx % len(colors)]), -1)
-
-        return image
-
-    def drawSkeleton(self, image, points, skeleton, color_palette='Set2', palette_samples='jet', person_index=0,
-                    confidence_threshold=0.5):
-        """
-        Draws a `skeleton` on `image`.
-
-        Args:
-            image: image in opencv format
-            points: list of points to be drawn.
-                Shape: (nof_points, 3)
-                Format: each point should contain (y, x, confidence)
-            skeleton: list of joints to be drawn
-                Shape: (nof_joints, 2)
-                Format: each joint should contain (point_a, point_b) where `point_a` and `point_b` are an index in `points`
-            color_palette: name of a matplotlib color palette
-                Default: 'Set2'
-            palette_samples: number of different colors sampled from the `color_palette`
-                Default: 8
-            person_index: index of the person in `image`
-                Default: 0
-            confidence_threshold: only points with a confidence higher than this threshold will be drawn. Range: [0, 1]
-                Default: 0.5
-
-        Returns:
-            A new image with overlaid joints
-
-        """
-        # 使用緩存的顏色，避免每次都重新計算
-        colors = self._get_colors(color_palette, palette_samples if isinstance(palette_samples, int) else 8)
-        
-        right_skeleton = self.pose_estimater.joints['haple']['right_points_indices']
-        left_skeleton = self.pose_estimater.joints['haple']['left_points_indices']
-        
-        for i, joint in enumerate(skeleton):
-            pt1, pt2 = points[joint]
-            pt1_unlabel = False if pt1[0] != 0 and pt1[1] != 0 else True
-            pt2_unlabel = False if pt2[0] != 0 and pt2[1] != 0 else True
-            
-            # 根據關節所屬部位決定顏色
-            skeleton_color = (0, 165, 255)  # 預設橙色
-            if joint in right_skeleton:
-                skeleton_color = (240, 176, 0)  # 右側 - 藍色
-            elif joint in left_skeleton:
-                skeleton_color = (0, 0, 255)  # 左側 - 紅色
-            
-            if pt1[2] > confidence_threshold and not pt1_unlabel and pt2[2] > confidence_threshold and not pt2_unlabel:
-                image = cv2.line(
-                    image, (int(pt1[1]), int(pt1[0])), (int(pt2[1]), int(pt2[0])),
-                    skeleton_color , 6
-                )
-        return image
-
-    def drawPointsandSkeleton(self, image, person_df, skeleton, points_color_palette='gist_rainbow', points_palette_samples=10,
-                                skeleton_color_palette='Set2', skeleton_palette_samples='jet', confidence_threshold=0.3):
-        """
-        Draws `points` and `skeleton` on `image`.
-
-        Args:
-            image: image in opencv format
-            points: list of points to be drawn.
-                Shape: (nof_points, 3)
-                Format: each point should contain (y, x, confidence)
-            skeleton: list of joints to be drawn
-                Shape: (nof_joints, 2)
-                Format: each joint should contain (point_a, point_b) where `point_a` and `point_b` are an index in `points`
-            points_color_palette: name of a matplotlib color palette
-                Default: 'tab20'
-            points_palette_samples: number of different colors sampled from the `color_palette`
-                Default: 16
-            skeleton_color_palette: name of a matplotlib color palette
-                Default: 'Set2'
-            skeleton_palette_samples: number of different colors sampled from the `color_palette`
-                Default: 8
-            person_index: index of the person in `image`
-                Default: 0
-            confidence_threshold: only points with a confidence higher than this threshold will be drawn. Range: [0, 1]
-                Default: 0.5
-
-        Returns:
-            A new image with overlaid joints
-
-        """
-        if person_df is None:
-            return image
-        if person_df.empty:
-            return image
-        person_data = self.DftoPoints(person_df)
-        for person_id, points in person_data.items(): 
-            image = self.drawSkeleton(image, points, skeleton,person_index=person_id)
-            image = self.drawPoints(image, points,person_idx=person_id)
-        return image
-
-    def DftoPoints(self, person_df):
-        person_data = {}
-        person_ids = person_df['person_id']
-        person_kpts = person_df['keypoints']
-        for id, kpts in zip(person_ids, person_kpts):
-            person_data[id] = np.array(self.swapValues(kpts))
-        return person_data
-
-    def swapValues(self, kpts):
-        return [[item[1], item[0], item[2]] for item in kpts]
 
     def setShowBbox(self, status:bool):
         self.show_bbox = status

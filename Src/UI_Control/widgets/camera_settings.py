@@ -1,13 +1,13 @@
 """Live settings for the cameras already owned by the main window's tabs."""
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
+from PyQt5.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout,
     QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget)
 
 LABELS = {"exposure": "曝光時間", "gain": "增益", "red": "紅色白平衡",
           "blue": "藍色白平衡", "focus": "對焦位置", "focal_length": "光學焦距"}
 
 
-class CameraSettingsDialog(QDialog):
+class CameraSettingsPanel(QWidget):
     settings_changed = pyqtSignal()
     def __init__(self, sources, parent=None):
         super().__init__(parent)
@@ -15,15 +15,15 @@ class CameraSettingsDialog(QDialog):
         self._cameras = []
         self._identity = None
         self._states = {}
-        self.setWindowTitle("攝影機設定")
-        self.resize(720, 510)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.camera_combo = QComboBox()
         layout.addWidget(self.camera_combo)
         self.status = QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.WrapAllRows)
         self.rows = {}
         for key, label in LABELS.items():
             row = QWidget()
@@ -33,7 +33,7 @@ class CameraSettingsDialog(QDialog):
             slider = QSlider(Qt.Horizontal)
             slider.setRange(0, 1000)
             spin = QDoubleSpinBox()
-            spin.setMinimumWidth(150)
+            spin.setMinimumWidth(110)
             spin.setKeyboardTracking(False)
             apply = QPushButton("套用")
             note = QLabel()
@@ -57,11 +57,8 @@ class CameraSettingsDialog(QDialog):
         buttons = QHBoxLayout()
         refresh = QPushButton("重新讀取")
         refresh.clicked.connect(self.refresh)
-        close = QPushButton("關閉")
-        close.clicked.connect(self.close)
         buttons.addWidget(refresh)
         buttons.addStretch()
-        buttons.addWidget(close)
         layout.addLayout(buttons)
         self.camera_combo.currentIndexChanged.connect(self.refresh)
         self.timer = QTimer(self)
@@ -104,7 +101,7 @@ class CameraSettingsDialog(QDialog):
     def refresh(self):
         self._states = {}
         index = self.camera_combo.currentIndex()
-        message = "請先在「2D 相機」或「2D」分頁開啟攝影機，再開啟此設定視窗。"
+        message = "請先在「2D 相機」或「2D」開啟攝影機；此處可調整正在使用的正面／側面相機。"
         recording = False
         if 0 <= index < len(self._cameras):
             _, camera, owner = self._cameras[index]

@@ -101,29 +101,17 @@ class PitchReplayTests(unittest.TestCase):
         self.assertTrue(self.tab.ui.maxER_ptn.isEnabled())
         self.assertTrue(self.tab.ui.release_ptn.isEnabled())
 
-    def test_real_analyzer_emits_mer_angle_and_phase_detection_reaches_release(self):
-        rows = [self.pose_row(i) for i in range(12)]
-        for frame, angle in ((5, 160.), (6, 175.), (7, 160.)):
-            points = rows[frame]['keypoints']
-            points[8][:2] = [200., 200.]
-            points[10][:2] = [200. + 100 * self.np.cos(self.np.deg2rad(angle)),
-                              200. - 100 * self.np.sin(self.np.deg2rad(angle))]
-            points[6][:2] = [180., 300.]
-        for frame, x in ((8, 380.), (9, 410.)):
-            rows[frame]['keypoints'][10][:2] = [x, 150.]
-            rows[frame]['keypoints'][6][:2] = [180., 300.]
+    def test_shared_detector_uses_ground_contact_and_raised_arm(self):
+        from Src.UI_Control.tests.test_pitch_events import pitch_rows
+        rows = pitch_rows()
         self.tab.pose_estimater_2.setProcessedData(self.pd.DataFrame(rows))
-        for frame in range(12):
+        self.tab.video_loader.total_frames = len(rows)
+        self.tab.video_loader.video_frames = self.tab.video_loader.video_frames_2 = [self.tab.video_loader.video_frames[0]] * len(rows)
+        for frame in range(len(rows)):
             self.tab.pose_analyzer_2.addAnalyzeInfo(frame)
-        self.assertAlmostEqual(self.tab._get_frame_analysis_data(6)['right_shoulder_external_rotation_angle'], 175.)
-        self.tab.preparation_frame = 2
-        self.tab.foot_contact_frame = 4
-        for frame in range(5, 10):
             self.tab.phaseDetection(frame)
-        self.assertTrue(self.tab.mer_locked)
-        self.assertEqual(self.tab.max_shoulder_angle_frame, 6)
-        self.assertTrue(self.tab.release_locked)
-        self.assertEqual(self.tab.wrist_speed_frame, 8)
+        self.assertEqual((self.tab.foot_contact_frame, self.tab.max_shoulder_angle_frame, self.tab.wrist_speed_frame), (10, 15, 17))
+        self.assertTrue(self.tab.mer_locked and self.tab.release_locked)
 
     def test_single_person_landing_does_not_require_manual_person_selection(self):
         self.set_poses()
@@ -134,26 +122,6 @@ class PitchReplayTests(unittest.TestCase):
         rows = [self.pose_row(i) for i in range(12)] + [extra]
         self.tab.pose_estimater_2.setProcessedData(self.pd.DataFrame(rows))
         self.assertFalse(self.tab.pose_analyzer_2.is_left_ankle_landed(8))
-
-    def test_available_recording_skeleton_reaches_all_events(self):
-        folder = UI_DIR.parents[1] / 'Db/Record/20261008_Pitcher01/20261008_1130_P05'
-        files = list(folder.glob('CS_*.json'))
-        if not files:
-            self.skipTest('Local P05 recording is not present')
-        rows = json.loads(files[0].read_text(encoding='utf-8'))
-        total = max(r['frame_number'] for r in rows) + 1
-        self.tab.video_loader.total_frames = total
-        self.tab.video_loader.video_frames = [self.tab.video_loader.video_frames[0]] * total
-        self.tab.video_loader.video_frames_2 = [self.tab.video_loader.video_frames_2[0]] * total
-        self.tab.pose_estimater_2.setProcessedData(self.pd.DataFrame(rows))
-        self.tab.pose_analyzer_2.fps = 67.
-        for frame in range(total):
-            self.tab.pose_analyzer_2.addAnalyzeInfo(frame)
-            self.tab.phaseDetection(frame)
-        self.assertTrue(self.tab.mer_locked)
-        self.assertTrue(self.tab.release_locked)
-        self.assertLess(self.tab.foot_contact_frame, self.tab.max_shoulder_angle_frame)
-        self.assertLess(self.tab.max_shoulder_angle_frame, self.tab.wrist_speed_frame)
 
     def test_raw_frame_fallback_and_missing_frame_guard(self):
         with patch.object(self.tab.image_drawer_2, 'drawAngleInfo', side_effect=ValueError('bad pose')):
@@ -260,6 +228,99 @@ class PitchReplayTests(unittest.TestCase):
         self.assertEqual(payload['metrics'], {'spin': 100})
         self.assertEqual(payload['external'], 42)
         self.assertIsNone(payload['Keyframes']['BR']['wrist_speed'])
+
+    def test_loaded_replay_restores_skeleton_without_inference(self):
+        self.set_events()
+        self.set_poses()
+        self.tab._complete_video_analysis()
+        before = {p.name: p.read_bytes() for p in self.folder.glob('*.json')}
+        self.tab.ui.showSkeletonCheckBox.setChecked(False)
+        with patch.object(self.tab.pose_estimater, 'detectKpt', side_effect=AssertionError('replay inferred')), \
+             patch.object(self.tab.pose_estimater_2, 'detectKpt', side_effect=AssertionError('replay inferred')):
+            self.tab.updateVideoInfo()
+            self.tab._play_timer.stop()
+            self.assertTrue(self.tab.ui.showSkeletonCheckBox.isChecked())
+            self.assertFalse(self.tab.ui.skeletonVideoCheckBox.isChecked())
+            self.assertTrue(self.tab.image_drawer.show_skeleton)
+            self.assertTrue(self.tab.image_drawer_2.show_skeleton)
+            for frame in (11, 4, 7, 0):
+                self.tab.ui.frameSlider.setValue(frame)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.folder.glob('*.json')})
+        self.assertFalse(hasattr(self.tab, 'save_analysis_button'))
+
+    def test_reanalysis_automatically_exports_json(self):
+        self.set_poses()
+        self.tab.restart_video_analysis()
+        self.tab._play_timer.stop()
+        for _ in range(12):
+            self.tab._playNextFrame()
+        self.assertTrue(self.tab._analysis_finalized)
+        result = json.loads((self.folder / 'CF_test_BRandRapsodo.json').read_text(encoding='utf-8'))
+        self.assertEqual(result['Analysis']['video_total_frames'], 12)
+
+    def test_left_replay_is_raw_and_right_replay_has_skeleton(self):
+        self.set_poses()
+        self.tab.image_drawer.setShowSkeleton(True)
+        self.tab.image_drawer_2.setShowSkeleton(True)
+        self.tab.show_br_points, self.tab.br_points = True, [(100, 100)]
+        with patch.object(self.tab, 'showImage') as show, \
+             patch.object(self.tab, '_draw_br_points', side_effect=lambda image: image * 0):
+            self.tab.updateFrame(frame_num=4)
+        raw = self.tab.video_loader.video_frames[4]
+        self.np.testing.assert_array_equal(show.call_args_list[0].args[0], raw)
+        self.assertFalse(self.np.array_equal(show.call_args_list[1].args[0], raw))
+
+    def test_keyframe_thumbnail_and_heading_pause_and_seek(self):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        self.set_events()
+        self.set_poses()
+        self.tab._render_keyframe_results()
+        self.tab._play_timer = Mock()
+        self.tab.is_play = True
+        QTest.mouseClick(self.tab.ui.merView.viewport(), Qt.LeftButton)
+        self.assertEqual(self.tab.ui.frameSlider.value(), 7)
+        self.assertFalse(self.tab.is_play)
+        self.tab._play_timer.stop.assert_called()
+        self.tab.ui.release_ptn.click()
+        self.assertEqual(self.tab.ui.frameSlider.value(), 10)
+
+    def test_single_side_replay_remaps_paired_timeline_to_source_frames(self):
+        self.tab.single_video_mode = True
+        self.tab.video_loader.video_name = self.tab.video_loader.video_name_2 = 'CS_test'
+        payload = {'video_name': 'CF_test', 'video_name_2': 'CS_test',
+                   'Analysis': {'pose_frame_number_space': 'playback_timeline', 'frame_offset': 2},
+                   'Keyframes': {'FC': {'frame': 4}, 'MER': {'frame': 7}, 'BR': {'frame': 10}}}
+        (self.folder / 'CS_test_BRandRapsodo.json').write_text(json.dumps(payload))
+        rows = [self.pose_row(i) for i in range(2, 12)]
+        (self.folder / 'CS_test.json').write_text(json.dumps(rows))
+        self.assertTrue(self.tab._load_saved_analysis())
+        self.assertEqual((self.tab.foot_contact_frame, self.tab.max_shoulder_angle_frame, self.tab.wrist_speed_frame), (2, 5, 8))
+        for estimator in (self.tab.pose_estimater, self.tab.pose_estimater_2):
+            self.np.testing.assert_array_equal(estimator.getPersonDf(frame_num=0, is_kpt=True), rows[0]['keypoints'])
+
+    def test_saved_pose_timeline_takes_precedence_over_old_single_video_events(self):
+        from Src.analysis.pose_replay import pose_timeline, saved_pose_offset
+        old = {'video_name': 'CS_test', 'video_name_2': 'CS_test',
+               'Analysis': {'pose_frame_number_space': 'playback_timeline', 'frame_offset': 0}}
+        (self.folder / 'CS_test_BRandRapsodo.json').write_text(json.dumps(old))
+        self.set_poses()
+        self.set_events()
+        self.tab.setFrameOffset(2)
+        self.assertTrue(self.tab._complete_video_analysis())
+        metadata = pose_timeline(self.folder, ['CS_test', 'CF_test'])
+        self.assertEqual(saved_pose_offset(metadata, 'CS_test'), 2)
+        # Preserve the independent single-video events; only pose metadata changes.
+        self.assertEqual(json.loads((self.folder / 'CS_test_BRandRapsodo.json').read_text()), old)
+
+    def test_filling_a_missing_pose_frame_keeps_loaded_history(self):
+        estimator = self.tab.pose_estimater_2
+        estimator.setProcessedData(self.pd.DataFrame([self.pose_row(1), self.pose_row(3)]))
+        estimator.setDetect(True)
+        with patch.object(estimator, 'processImage', return_value=(None, [])):
+            estimator.detectKpt(self.tab.video_loader.video_frames[2], 2, is_video=True)
+        self.assertEqual(estimator.person_df.frame_number.tolist(), [1, 3])
+        self.assertEqual(estimator.processed_frames, {1, 2, 3})
 
     def test_export_failure_remains_retryable(self):
         self.set_events()

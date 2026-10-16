@@ -53,6 +53,7 @@ class Video3DTests(unittest.TestCase):
     def close_all(self):
         if self.tab is not None:
             self.tab.is_play = False
+            self.tab._set_analysis_running(False)
             if hasattr(self.tab, '_play_timer'):
                 self.tab._play_timer.stop()
             self.viewers.extend([self.tab.viewer3d, self.tab.pose_analyzer.viewer3D, self.tab.pose_analyzer_2.viewer3D])
@@ -77,7 +78,7 @@ class Video3DTests(unittest.TestCase):
             pairs.append({'keypoints': self.np.c_[pixels, self.np.full(26, .99)].tolist()})
         return xyz / 1000., pairs
 
-    def setup_tab(self):
+    def setup_tab(self, mock_events=True):
         self.tab = self.module.PoseVideoTabControl(SimpleNamespace(setImageSize=Mock()))
         tab, loader = self.tab, self.tab.video_loader
         loader.video_name, loader.video_name_2 = 'CF_test', 'CS_test'
@@ -95,6 +96,7 @@ class Video3DTests(unittest.TestCase):
         loader.video_size, loader.is_loading = (640, 480), False
         tab.calibration_path.setText(str(self.rig_path))
         tab.updateVideoInfo()
+        tab._analysis_timer.stop()  # Drive the sequential scan deterministically.
         self.assertTrue(tab._calibration_ready, tab.calibration_status.text())
         rows = [[], []]
         for f in range(12):
@@ -107,15 +109,24 @@ class Video3DTests(unittest.TestCase):
         tab.preparation_frame, tab.foot_contact_frame = 2, 4
         tab.max_shoulder_angle_frame, tab.wrist_speed_frame = 7, 11
         tab.mer_locked = tab.release_locked = True
-        tab._manual_events = {'foot_contact_frame', 'max_shoulder_angle_frame', 'wrist_speed_frame'}
+        if mock_events:
+            # This camera geometry fixture is not a pitching motion. Keep event
+            # timing deterministic while exercising real reconstruction and I/O.
+            from Src.analysis.pitch_events import PitchEvents
+            events = patch.object(self.module, 'detect_pitch_events', return_value=PitchEvents(2, 4, 7, 11, True, True))
+            events.start()
+            self.addCleanup(events.stop)
         return tab
 
     def run_tab_frames(self, tab):
-        for f in range(12):
-            tab.ui.frameSlider.blockSignals(True)
-            tab.ui.frameSlider.setValue(f)
-            tab.ui.frameSlider.blockSignals(False)
-            tab.analyzeFrame()
+        if not tab._analysis_running:
+            tab.toggleDetect()
+        tab._analysis_timer.stop()
+        for f in range(tab.video_loader.total_frames):
+            tab._analyze_next_frame()
+        self.assertTrue(tab._analysis_complete, tab.calibration_status.text())
+        tab._play_timer.stop()
+        tab.is_play = False
 
     def test_distortion_and_camera_order_recover_true_scale(self):
         xyz, pairs = self.points()
@@ -151,6 +162,7 @@ class Video3DTests(unittest.TestCase):
 
     def test_full_analysis_exports_last_frame_br_without_skeleton_checkbox(self):
         tab = self.setup_tab()
+        tab.ui.showSkeletonCheckBox.setChecked(False)
         self.assertFalse(tab.ui.showSkeletonCheckBox.isChecked())
         self.run_tab_frames(tab)
         output = json.loads((self.folder / 'CF_test_pnp_keyframes.json').read_text(encoding='utf-8'))
@@ -241,6 +253,9 @@ class Video3DTests(unittest.TestCase):
         rows = [e.person_df.copy() for e in (tab.pose_estimater, tab.pose_estimater_2)]
         tab.calibration_combo.setCurrentIndex(2)
         self.assertTrue(tab._apply_selected_calibration())
+        self.np.testing.assert_array_equal(tab.viewer3d.K_L, tab.K_F)
+        self.np.testing.assert_array_equal(tab.viewer3d.K_R, tab.K_S)
+        self.np.testing.assert_array_equal(tab.viewer3d.F, tab.F.T)
         for estimator, df in zip((tab.pose_estimater, tab.pose_estimater_2), rows):
             estimator.setProcessedData(df)
         tab.preparation_frame, tab.foot_contact_frame = 2, 4
@@ -251,6 +266,10 @@ class Video3DTests(unittest.TestCase):
         coordinates = json.loads((self.folder / 'CF_test_legacy_3D.json').read_text())
         self.assertIsInstance(coordinates, list)
         self.assertEqual(len(coordinates), 12)
+        tab.updateVideoInfo()
+        tab._play_timer.stop()
+        self.assertFalse(tab._analysis_running)
+        self.assertTrue(tab.viewer3d._camera_range_initialized)
 
     def test_processed_pose_timeline_remapping(self):
         tab = self.setup_tab()
@@ -264,7 +283,7 @@ class Video3DTests(unittest.TestCase):
         self.np.testing.assert_allclose(first, pairs[1]['keypoints'])
         self.assertIsNone(tab.pose_estimater_2.getPersonDf(frame_num=0))
 
-    def test_first_playback_frame_is_analyzed_even_when_slider_already_zero(self):
+    def test_first_playback_frame_is_rendered_even_when_slider_already_zero(self):
         tab = self.setup_tab()
         tab._play_timer = Mock()
         tab._current_play_frame = 0
@@ -273,59 +292,204 @@ class Video3DTests(unittest.TestCase):
             tab._playNextFrame()
             analyze.assert_called_once()
 
-    def test_real_p05_cached_poses_keep_events_visible_when_3d_is_sparse(self):
-        repo = UI_DIR.parents[1]
-        folder = repo / 'Db/Record/20261008_Pitcher01/20261008_1130_P05'
-        cf = next(folder.glob('CF_*.mp4'), None)
-        cs = next(folder.glob('CS_*.mp4'), None)
-        calibration = repo / 'Db/Calibration/chessboard/pnp/stereo.json'
-        if cf is None or cs is None or not calibration.is_file():
-            self.skipTest('Local P05 recording not available')
+    def test_automatic_analysis_then_cached_replay_never_infers_or_saves(self):
         tab = self.setup_tab()
-        loader = tab.video_loader
-        loader.video_path, loader.video_path_2 = str(cf), str(cs)
-        loader.video_name, loader.video_name_2 = cf.stem, cs.stem
-        loader.folder_path = str(folder)
-        cap = self.cv2.VideoCapture(str(cf))
-        try:
-            count, fps = int(cap.get(self.cv2.CAP_PROP_FRAME_COUNT)), cap.get(self.cv2.CAP_PROP_FPS)
-            ok, first = cap.read()
-            self.assertTrue(ok)
-        finally:
-            cap.release()
-        loader.video_frames, loader.video_frames_2 = [first] * count, [first] * count
-        loader.total_frames, loader.video_fps, loader.video_size = count, fps, first.shape[1::-1]
-        tab.calibration_path.setText(str(calibration))
-        tab.is_processed = True
+        self.assertTrue(tab._analysis_running)
+        self.run_tab_frames(tab)
+        self.assertFalse(tab._analysis_dirty)
+        before = {p.name: p.read_bytes() for p in self.folder.glob('*.json')}
+        with patch.object(tab, '_analyze_video_frame', side_effect=AssertionError('replay analyzed')), \
+             patch.object(tab.pose_estimater, 'detectKpt', side_effect=AssertionError('replay inferred')), \
+             patch.object(tab.pose_estimater_2, 'detectKpt', side_effect=AssertionError('replay inferred')):
+            tab.updateVideoInfo()
+            self.assertFalse(tab._analysis_running)
+            self.assertTrue(tab.is_play)
+            tab._play_timer.stop()
+            self.assertTrue(tab.ui.showSkeletonCheckBox.isChecked())
+            self.assertTrue(tab.image_drawer.show_skeleton)
+            self.assertTrue(tab.image_drawer_2.show_skeleton)
+            for frame in (11, 0, 7, 4, 10):
+                tab.ui.frameSlider.setValue(frame)
+            self.assertEqual(tab.wrist_speed_frame, 11)
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.folder.glob('*.json')})
+
+    def test_reanalysis_completes_every_frame_and_saves_without_button(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        output = self.folder / 'CF_test_pnp_keyframes.json'
+        output.unlink()
+        tab.toggleDetect()
+        self.assertTrue(tab._analysis_running)
+        self.assertFalse(tab.ui.frameSlider.isEnabled())
+        self.run_tab_frames(tab)
+        result = json.loads(output.read_text(encoding='utf-8'))
+        self.assertTrue(result['Analysis']['scan_complete'])
+        self.assertEqual(result['Analysis']['scanned_frames'], list(range(12)))
+        self.assertFalse(hasattr(tab, 'save_analysis_button'))
+        self.assertTrue(tab.ui.frameSlider.isEnabled())
+
+    def test_reanalysis_discards_manual_events_and_saves_new_detection(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        tab.ui.frameSlider.setValue(5)
+        tab._set_manual_event('foot_contact_frame')
+        self.assertEqual(tab.foot_contact_frame, 5)
+        self.assertIn('foot_contact_frame', tab._manual_events)
+        tab.toggleDetect()
+        self.assertFalse(tab._manual_events)
+        self.assertIsNone(tab.foot_contact_frame)
+        self.run_tab_frames(tab)
+        result = json.loads((self.folder / 'CF_test_pnp_keyframes.json').read_text(encoding='utf-8'))
+        self.assertEqual(result['foot_contact']['frame_number'], 4)
+        self.assertEqual(result['Analysis']['manual_events'], [])
+
+    def test_keyframe_clicks_do_not_resize_video_frames(self):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        tab.resize(1366, 950)
+        tab.show()
+        self.app.processEvents()
+        views = (tab.ui.FrameView, tab.ui.FrameView_2)
+        before = [view.geometry() for view in views]
+        for frame, thumbnail, button in ((4, tab.ui.fcView, tab.ui.footContact_ptn),
+                                         (7, tab.ui.merView, tab.ui.maxER_ptn),
+                                         (11, tab.ui.brView, tab.ui.release_ptn)):
+            tab.is_play = True
+            button.click()
+            self.app.processEvents()
+            self.assertFalse(tab.is_play)
+            self.assertEqual(tab.ui.frameSlider.value(), frame)
+            self.assertEqual([view.geometry() for view in views], before)
+            tab.ui.frameSlider.setValue(0)
+            QTest.mouseClick(thumbnail.viewport(), Qt.LeftButton)
+            self.app.processEvents()
+            self.assertEqual(tab.ui.frameSlider.value(), frame)
+            self.assertEqual([view.geometry() for view in views], before)
+
+    def test_sidebar_tabs_do_not_resize_video_or_keyframe_rows(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        tab.show()
+        views = (tab.ui.FrameView, tab.ui.FrameView_2, tab.ui.fcView,
+                 tab.ui.merView, tab.ui.brView, tab.ui.graph_widget)
+
+        def settle_layout():
+            # Layout requests and deferred image fitting use separate Qt turns.
+            for _ in range(3):
+                self.app.processEvents()
+
+        for width, height in ((1366, 950), (1700, 1050), (1100, 800)):
+            tab.resize(width, height)
+            tab.ui.replay_sidebar.setCurrentIndex(0)
+            settle_layout()
+            before = [view.geometry() for view in views]
+            for index in (1, 2, 3, 0, 2):
+                with self.subTest(size=(width, height), sidebar=index):
+                    tab.ui.replay_sidebar.setCurrentIndex(index)
+                    settle_layout()
+                    self.assertEqual([view.geometry() for view in views], before)
+            tab.ui.maxER_ptn.click()
+            settle_layout()
+            self.assertEqual([view.geometry() for view in views], before)
+
+    def test_overlay_matches_2d_for_low_confidence_missing_and_selected_joints(self):
+        from Src.UI_Control.rendering.vis_image import ImageDrawer as Drawer2D
+        tab = self.setup_tab()
+        rows = tab.pose_estimater.person_df.to_dict('records')
+        points = rows[0]['keypoints']
+        points[10][2] = .4
+        points[8][:2] = [float('nan'), float('nan')]
+        tab.pose_estimater.setProcessedData(self.pd.DataFrame(rows))
+        tab.pose_estimater.person_id = 1
+        drawer = Drawer2D(tab.pose_estimater, tab.pose_analyzer)
+        drawer.setShowSkeleton(True)
+        tab.image_drawer.setShowSkeleton(True)
+        frame = tab.video_loader.video_frames[0]
+        two = drawer.drawInfo(frame, 0)
+        three = tab.image_drawer.drawInfo(frame, 0)
+        self.np.testing.assert_array_equal(two, three)
+        self.assertFalse(self.np.array_equal(frame, three))
+
+    def test_canonical_2d_poses_override_method_cache_and_invalidate_3d_results(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        rows = tab.pose_estimater_2.person_df.to_dict('records')
+        rows[0]['keypoints'][10][0] += 10
+        (self.folder / 'CS_test.json').write_text(json.dumps(rows))
         tab.updateVideoInfo()
-        self.assertTrue(tab._calibration_ready, tab.calibration_status.text())
-        loader.folder_path = str(self.folder)  # Never write into the real recording.
-        with patch.object(tab, '_updateFrame'):
-            for f in range(count):
-                tab.ui.frameSlider.blockSignals(True)
-                tab.ui.frameSlider.setValue(f)
-                tab.ui.frameSlider.blockSignals(False)
-                tab.analyzeFrame()
-        for f, view, kind in ((tab.foot_contact_frame, tab.ui.fcView, 'foot_contact'),
-                              (tab.max_shoulder_angle_frame, tab.ui.merView, 'max_shoulder_er'),
-                              (tab.wrist_speed_frame, tab.ui.brView, 'release')):
-            self.assertIsNotNone(f)
-            cap = self.cv2.VideoCapture(str(cf))
-            try:
-                cap.set(self.cv2.CAP_PROP_POS_FRAMES, f)
-                ok, actual = cap.read()
-                self.assertTrue(ok)
-                loader.video_frames[f] = actual
-            finally:
-                cap.release()
-            tab._display_keyframe_with_text(f, view, kind)
-            self.assertEqual(len(view.scene().items()), 1)
-        output = json.loads((self.folder / f'{cf.stem}_pnp_keyframes.json').read_text(encoding='utf-8'))
-        self.assertIsNone(output['foot_contact']['stride_distance_cm'])
-        self.assertEqual(output['Analysis']['sources'][cf.stem]['path'], str(cf.resolve()))
-        print('P05 candidate frames:', tab.foot_contact_frame, tab.max_shoulder_angle_frame, tab.wrist_speed_frame)
-        tab._display_keyframe_with_text(None, tab.ui.merView, 'max_shoulder_er')
-        self.assertEqual(len(tab.ui.merView.scene().items()), 1)
+        tab._analysis_timer.stop()
+        self.assertTrue(tab._analysis_running)
+        actual = tab.pose_estimater_2.getPersonDf(frame_num=0, is_kpt=True)
+        self.np.testing.assert_array_equal(actual, rows[0]['keypoints'])
+
+    def test_cancel_load_keeps_current_replay(self):
+        tab = self.setup_tab()
+        with patch.object(self.module.QFileDialog, 'getOpenFileName', return_value=('', '')), \
+             patch.object(tab.video_loader, 'loadVideo') as load:
+            tab.loadVideo()
+        load.assert_not_called()
+        self.assertEqual(tab.wrist_speed_frame, 11)
+        self.assertEqual(tab.video_loader.video_name, 'CF_test')
+
+    def test_single_load_pairs_front_and_side_before_reset(self):
+        tab = self.setup_tab()
+        with patch.object(tab.video_loader, 'loadVideo') as load, patch.object(tab, 'checkVideoLoad'):
+            tab.loadVideo(video_path=str(self.folder / 'CS_test.avi'))
+        load.assert_called_once_with(str(self.folder / 'CF_test.avi'), str(self.folder / 'CS_test.avi'))
+
+    def test_missing_pose_cache_is_rebuilt_even_with_saved_events(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        (self.folder / 'CS_test_pnp_poses.json').unlink()
+        tab.updateVideoInfo()
+        tab._analysis_timer.stop()
+        self.assertTrue(tab._analysis_running)
+
+    def test_manual_event_correction_autosaves_and_rejects_wrong_order(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        tab.ui.frameSlider.setValue(10)
+        tab._set_manual_event('wrist_speed_frame')
+        data = json.loads((self.folder / 'CF_test_pnp_keyframes.json').read_text(encoding='utf-8'))
+        self.assertEqual(data['release']['frame_number'], 10)
+        tab.ui.frameSlider.setValue(3)
+        tab._set_manual_event('wrist_speed_frame')
+        self.assertEqual(tab.wrist_speed_frame, 10)
+        self.assertIn('FC < MER < BR', tab.calibration_status.text())
+
+    def test_both_pages_agree_on_p02_p03_p04_without_metric_coordinates(self):
+        from Src.UI_Control.widgets.pitch_widget import PosePitchTabControl
+        tab = self.setup_tab(mock_events=False)
+        tab._set_analysis_running(False)
+        with patch.object(PosePitchTabControl, 'load_video_list'):
+            pitch = PosePitchTabControl(SimpleNamespace(setImageSize=Mock()))
+        try:
+            for folder_name, stem, expected in (
+                    ('20261008_1050_P02', 'CS_20261008_1050_Pitcher02_P02', (110, 117, 120)),
+                    ('20261008_1050_P03', 'CS_20261008_1050_Pitcher02_P03', (100, 108, 111)),
+                    ('20261008_1052_P04', 'CS_20261008_1052_Pitcher02_P04', (111, 118, 120))):
+                path = UI_DIR.parents[1] / 'Db/Record/20261008_Pitcher02' / folder_name / (stem + '.json')
+                if not path.is_file():
+                    self.skipTest('Local P02/P03/P04 poses are not available')
+                rows = json.loads(path.read_text(encoding='utf-8'))
+                for controller in (tab, pitch):
+                    controller.resetPhaseDetection()
+                    controller.pose_estimater_2.setProcessedData(self.pd.DataFrame(rows))
+                    controller.pose_estimater.reset()
+                    controller.video_loader.video_fps = 67.
+                    with patch.object(controller, '_render_keyframe_results'):
+                        for frame in range(max(r['frame_number'] for r in rows) + 1):
+                            controller.phaseDetection(frame)
+                    self.assertEqual((controller.foot_contact_frame, controller.max_shoulder_angle_frame,
+                                      controller.wrist_speed_frame), expected, stem)
+        finally:
+            pitch.timer.stop()
+            self.app.removeEventFilter(pitch)
+            pitch.close()
+            pitch.deleteLater()
+
 
 
 if __name__ == '__main__':
