@@ -297,13 +297,14 @@ class PoseVideoTabControl(QWidget):
                          for name, path in zip((loader.video_name, loader.video_name_2), (loader.video_path, loader.video_path_2))}
         if method == 'legacy':
             self.applyCalibration(loader.folder_path)
-            self._legacy_calibration = {'K_F': self.K_F.tolist(), 'K_S': self.K_S.tolist(), 'F': self.F.tolist()}
+            # coordinate_frame：2026-10-20 前的快取是正面相機座標，沒有這個欄位 → 比對不符，自動重算
+            self._legacy_calibration = {'K_F': self.K_F.tolist(), 'K_S': self.K_S.tolist(), 'F': self.F.tolist(),
+                                        'coordinate_frame': 'side_camera'}
             # Stored F maps side to front: x_front.T @ F @ x_side = 0.
-            # CF-first replay requires swapping intrinsics and transposing F.
-            if loader.video_name.upper().startswith('CF'):
-                viewer = Triangulate3DViewer(self.K_F, self.K_S, self.F.T)
-            else:
-                viewer = Triangulate3DViewer(self.K_S, self.K_F, self.F)
+            # 3D 一律以側面相機為原點（學姊原本的座標系，預設視角與舊 3D 檔都依此設計）；
+            # CF 在前時由 viewer 內部對調輸入，不改內參與 F 的對應。
+            viewer = Triangulate3DViewer(self.K_S, self.K_F, self.F,
+                                         swap_inputs=loader.video_name.upper().startswith('CF'))
             description = '舊版估算：固定倍率，距離與速度不具校正精度。'
         else:
             rig = load_rig(self.calibration_path.text())

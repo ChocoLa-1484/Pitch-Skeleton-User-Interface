@@ -256,9 +256,11 @@ class Video3DTests(unittest.TestCase):
         rows = [e.person_df.copy() for e in (tab.pose_estimater, tab.pose_estimater_2)]
         tab.calibration_combo.setCurrentIndex(2)
         self.assertTrue(tab._apply_selected_calibration())
-        self.np.testing.assert_array_equal(tab.viewer3d.K_L, tab.K_F)
-        self.np.testing.assert_array_equal(tab.viewer3d.K_R, tab.K_S)
-        self.np.testing.assert_array_equal(tab.viewer3d.F, tab.F.T)
+        # 3D 以側面相機為原點：K_L＝側面；CF 在前時由 viewer 對調輸入
+        self.np.testing.assert_array_equal(tab.viewer3d.K_L, tab.K_S)
+        self.np.testing.assert_array_equal(tab.viewer3d.K_R, tab.K_F)
+        self.np.testing.assert_array_equal(tab.viewer3d.F, tab.F)
+        self.assertTrue(tab.viewer3d.swap_inputs)
         for estimator, df in zip((tab.pose_estimater, tab.pose_estimater_2), rows):
             estimator.setProcessedData(df)
         tab.preparation_frame, tab.foot_contact_frame = 2, 4

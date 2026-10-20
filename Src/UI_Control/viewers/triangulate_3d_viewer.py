@@ -9,7 +9,10 @@ from scipy.spatial.transform import Rotation
 from scipy.signal import savgol_filter 
 
 class Triangulate3DViewer:
-    def __init__(self, K_L, K_R, F, extrinsics_path=None):
+    def __init__(self, K_L, K_R, F, extrinsics_path=None, swap_inputs=False):
+        # swap_inputs：呼叫端送進來的第一支是正面 CF 時設 True，內部先對調成「L＝側面」再三角化，
+        # 讓 3D 座標維持學姊原本的側面相機座標（預設視角、地面與舊 3D 檔都以此為準）
+        self.swap_inputs = swap_inputs
         # self.json_path_L = json_path_L
         # self.json_path_R = json_path_R
         self.K_L = K_L
@@ -233,6 +236,8 @@ class Triangulate3DViewer:
             data_L = json.load(f)
         with open(self.json_path_R) as f:
             data_R = json.load(f)
+        if self.swap_inputs:
+            data_L, data_R = data_R, data_L
 
         E = self.compute_essential_matrix()
         poses = self.decompose_essential_matrix(E)
@@ -286,6 +291,8 @@ class Triangulate3DViewer:
             # print(f"Frame {frame_num} 已經存在，跳過計算 (或更新)。")
             return
         # frame_L, frame_R: dict, 需有 "keypoints" 欄位
+        if self.swap_inputs:
+            frame_L, frame_R = frame_R, frame_L
         kp_L = np.array(frame_L["keypoints"])[:, :2].T
         kp_R = np.array(frame_R["keypoints"])[:, :2].T
         if kp_L.shape[1] != 26 or kp_R.shape[1] != 26:
