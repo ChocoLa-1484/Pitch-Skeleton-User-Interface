@@ -12,6 +12,12 @@
 
 **更新時間**：2026-10-14
 
+**【校正中心與 3D 座標修正（2026-10-20，使用者同意）】**
+- 使用者目前主軸：**實作 RoMa 外參**。其他校正方法保留作為比較基準（學姊校正桿 01/02 已整合進 calibrate.py；03_3d.py 是 baseline 驗證，保留）。
+- 新增 `Src/calibration/calibration_center.py`（`start_calibrate.bat` 開啟）：內參（即時拍攝／照片資料夾）與外參（RoMa、校正桿手點、03 驗證、棋盤格 PnP／8Points、十字架）在同一視窗點選；RoMa 在視窗內以 Roma 環境執行。`start_roma.bat` 與 tkinter 版 RoMa 視窗刪除（功能已在校正中心）。測試 `test_calibration_center.py`。
+- 3D 舊版估算一律以側面相機為原點（PR #4 改成 CF 在前後原點變正面，視角差約 90°）：viewer 內部對調輸入，與學姊原本計算差異 0.0；舊快取自動重算。
+- P1-012（關鍵幀判定成功率 35/77）：使用者同意交給同學調整，統計表在 `local/extrinsic/out/events_survey.csv`。
+
 **【PR #4 合併（2026-10-20）】**
 - 同學 ChocoLa-1484 的 PR #4（標題「fix main.py」，實際是 2D／3D／回放比較三頁重構）：新增 `Src/analysis/pitch_events.py`（2D、3D 共用的 FC／MER／BR 判定）、`pose_replay.py`（已存骨架的幀號換算）、比較頁選影片對話框、關鍵幀跳轉；3D 統一「載入影片」，CF 一律為第一支，舊版估算模式交換內參並轉置 F（數學正確）。
 - 衝突兩處：`video_widget_2.py` 採用 PR #4 新版面並保留「預設舊版估算」與 `chessboard_cross` 新路徑；PR #4 對 `PROJECT_LAYOUT.md` 的補充併入 `DEVELOPMENT.md` 最後一節。

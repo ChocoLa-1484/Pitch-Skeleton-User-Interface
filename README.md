@@ -128,15 +128,19 @@ python Src/UI_Control/main.py
 
 新架設或移動相機後需要重新校正，結果自動存到 `Db\Calibration\`，錄影時會把當下的校正值一起存進該筆錄影資料夾。
 
-雙擊專案根目錄的 **`start_calibrate.bat`**（或在 Anaconda Prompt 執行 `conda activate Pitcher` 後 `python .\Src\calibration\calibrate.py`）。
+雙擊專案根目錄的 **`start_calibrate.bat`** 開啟「校正中心」，所有校正方法都在這個視窗裡點選：
 
-按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。拍內參時板子要上下、左右、斜向都傾斜；只朝同一方向轉時程式會警告（fx 會算不準）。
+| 項目 | 方法 |
+|---|---|
+| 內參（每台相機各做一次） | 即時拍攝棋盤格；或讀取已拍好的照片資料夾 |
+| 外參（選一種） | **RoMa（不需道具，用當天錄影，研究測試中）**；校正桿手點（學姊方法）；校正桿 3D 驗證（學姊 03）；棋盤格 PnP／8Points；粉紅球十字架 |
 
-**RoMa 外參（測試中，不需校正道具）**：用當天的投球錄影直接算外參。第一次使用前需安裝 `Roma` 環境（見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）。
+拍內參時板子要上下、左右、斜向都傾斜；只朝同一方向轉時程式會警告（fx 會算不準）。
 
-1. 雙擊 `start_calibrate.bat`，勾選「只做內參」後按「開始校正」，完成兩台內參（不必拍校正桿）。
-2. 雙擊專案根目錄的 `start_roma.bat`。
-3. 按「加入資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
+**用 RoMa 做外參**（第一次使用前需安裝 `Roma` 環境，見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）：
+
+1. 校正中心選「即時拍攝棋盤格」→「開啟」，勾選「只做內參」，完成兩台內參。
+2. 校正中心選「RoMa」，按「加入錄影資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 
 其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
 

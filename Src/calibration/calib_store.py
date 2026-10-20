@@ -142,7 +142,7 @@ def load_stereo_calibration():
 
     fund = load_fundamental()
     if fund is None:
-        return None, f"找不到 {FUNDAMENTAL_JSON}（請先用 start_calibrate.bat 完成校正桿外參，或用 start_roma.bat 計算外參）"
+        return None, f"找不到 {FUNDAMENTAL_JSON}（請先用 start_calibrate.bat 完成校正桿外參，或在校正中心用 RoMa 計算外參）"
     if (fund.get("front"), fund.get("side")) != (front, side):
         return None, (f"F 矩陣是用 front={fund.get('front')} side={fund.get('side')} 算的，"
                       f"與目前角色 front={front} side={side} 不符，請重新執行 02")

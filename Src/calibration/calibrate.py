@@ -257,7 +257,7 @@ class CalibrationWindow(QMainWindow):
         form.addRow(self.scan_status)
         self.reuse = QCheckBox("沿用這兩台已有內參，只重做外參（鏡頭、焦距、解析度須相同）")
         form.addRow(self.reuse)
-        self.intrinsic_only = QCheckBox("只做內參（外參改用 RoMa：start_roma.bat，不拍校正桿）")
+        self.intrinsic_only = QCheckBox("只做內參（外參改用 RoMa：在校正中心選 RoMa，不拍校正桿）")
         form.addRow(self.intrinsic_only)
         self.cols, self.rows = QSpinBox(), QSpinBox()
         for spin, value in ((self.cols, 8), (self.rows, 11)):
@@ -604,7 +604,7 @@ class CalibrationWindow(QMainWindow):
             self.persist_session("complete")
         except OSError as exc:
             self.log("內參已套用，但工作階段狀態無法更新：{}".format(exc))
-        self.instructions.setText("內參完成，已更新 Db/Calibration。外參請雙擊 start_roma.bat，用當天的錄影計算。")
+        self.instructions.setText("內參完成，已更新 Db/Calibration。外參請到校正中心（start_calibrate.bat）選 RoMa，用當天的錄影計算。")
         self.log("兩台內參與正面／側面角色已更新；外參（fundamental.json）沒有改動，若相機有移動請用 RoMa 重新計算。")
         self.log("照片與內參樣本：{}".format(self.session))
         self.next_button.setText("開始另一次校正")

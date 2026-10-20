@@ -1,5 +1,5 @@
 @echo off
-REM Double-click to open the camera calibration wizard (intrinsics, or intrinsics + wand extrinsics).
+REM Double-click to open the calibration center (all intrinsic and extrinsic methods in one window).
 REM Requires Anaconda/Miniconda and the "Pitcher" environment (see README).
 
 set "CONDA_ACTIVATE="
@@ -9,12 +9,12 @@ for %%p in ("%USERPROFILE%\anaconda3" "%USERPROFILE%\miniconda3" "%ProgramData%\
 if not defined CONDA_ACTIVATE (
     echo Anaconda not found. Open "Anaconda Prompt" and run:
     echo     conda activate Pitcher
-    echo     python Src\calibration\calibrate.py
+    echo     python Src\calibration\calibration_center.py
     pause
     exit /b 1
 )
 
 call "%CONDA_ACTIVATE%" Pitcher
 cd /d "%~dp0"
-python Src\calibration\calibrate.py
+python Src\calibration\calibration_center.py
 pause

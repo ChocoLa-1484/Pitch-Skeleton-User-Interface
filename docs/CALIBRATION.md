@@ -22,7 +22,8 @@
 | `Src/calibration/calib.py` | 單台內參視窗（精靈內部也用它；可讀照片資料夾） |
 | `Src/calibration/calib_store.py`、`calibration_workflow.py` | 共用：校正檔讀寫與發布、校正桿 F 計算 |
 | `Src/calibration/chessboard_cross/` | 同學（ChocoLa-1484）的公制方法：棋盤格內外參、8 顆螢光球十字架、螢光球提取 |
-| `Src/calibration/roma/` | RoMa 外參（第 7 節）：`roma_extrinsic.py`（指令）、`roma_extrinsic_gui.py`（視窗，`start_roma.bat` 啟動） |
+| `Src/calibration/calibration_center.py` | **校正中心**（`start_calibrate.bat` 開啟）：所有內參、外參方法集中在一個視窗點選執行 |
+| `Src/calibration/roma/` | RoMa 外參（第 7 節）：`roma_extrinsic.py`，校正中心的 RoMa 項目會用 Roma 環境呼叫它 |
 | `Src/tools/measure_stride_pnp.py`、`measure_stride_8point.py` | 跨步量測（使用棋盤格 `stereo.json`） |
 | `Src/legacy/calibration/` | 學姊的 `03_3d.py`：校正桿 3D 驗證（01、02 已整合進 `calibrate.py`，2026-10-20 刪除） |
 
@@ -576,9 +577,9 @@ pip install git+https://github.com/ZhengMo1220/RoMa.git@77f8d68803526dcddfd9b7a4
 
 第一次執行會自動下載模型權重（約 2 GB，需要網路），之後會使用快取。
 
-**使用（視窗版，建議）**：雙擊專案根目錄的 `start_roma.bat`，加入錄影資料夾、勾選選項後按「開始計算」，過程訊息顯示在視窗內。視窗版是 `roma_extrinsic_gui.py`（tkinter，Roma 環境內建，不需另裝），計算內容與下面的指令版相同。
+**使用（建議）**：雙擊 `start_calibrate.bat` 開啟校正中心 → 選「RoMa」→ 加入錄影資料夾、勾選選項 →「開始計算」。校正中心會自動用 Roma 環境執行，訊息顯示在視窗下方。
 
-**內參從哪來**：RoMa 只算外參；`--save`／`--snapshot` 會搭配 `Db/Calibration` 裡現有的內參與正面／側面角色。用 `calibrate.py` 勾選「只做內參」，兩台內參完成後就會寫入內參與角色（不拍校正桿、不動既有外參），接著再用 RoMa 算外參。
+**內參從哪來**：RoMa 只算外參；`--save`／`--snapshot` 會搭配 `Db/Calibration` 裡現有的內參與正面／側面角色。在校正中心選「即時拍攝棋盤格」並勾選「只做內參」，兩台內參完成後就會寫入內參與角色（不拍校正桿、不動既有外參），接著再用 RoMa 算外參。
 
 **使用（指令版）**（在專案根目錄）：
 
