@@ -13,7 +13,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from PyQt5.QtCore import QProcess, QProcessEnvironment, Qt
-from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
+from PyQt5.QtCore import QSize
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                              QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -22,6 +24,36 @@ from Src.paths import DB_DIR, ROOT_DIR
 CAL = ROOT_DIR / 'Src' / 'calibration'
 CHESSBOARD_OUT = DB_DIR / 'Calibration' / 'chessboard'
 INTRINSICS_JSON = DB_DIR / 'Calibration' / 'intrinsic' / 'intrinsics_all.json'
+
+STYLE = '''
+QMainWindow, QWidget#root { background: #f3f5f8; }
+QWidget { font-family: 'Microsoft JhengHei UI', 'Microsoft JhengHei'; font-size: 10pt; color: #1f2933; }
+QListWidget#nav { background: #ffffff; border: none; border-right: 1px solid #e1e5eb; padding: 10px 8px; outline: 0; }
+QListWidget#nav::item { padding: 9px 12px; margin: 2px 0; border-radius: 6px; }
+QListWidget#nav::item:hover { background: #eef3fb; }
+QListWidget#nav::item:selected { background: #2563eb; color: #ffffff; }
+QFrame#card { background: #ffffff; border: 1px solid #e1e5eb; border-radius: 10px; }
+QLabel#title { font-size: 15pt; font-weight: bold; color: #111827; }
+QLabel#desc { background: #f6f8fb; border-radius: 6px; padding: 10px 12px; color: #4b5563; }
+QLabel#tag { border-radius: 9px; padding: 2px 10px; font-size: 9pt; font-weight: bold; }
+QLabel#tag[kind=research] { background: #fef3c7; color: #92400e; }
+QLabel#tag[kind=baseline] { background: #e0e7ff; color: #3730a3; }
+QLabel#tag[kind=classmate] { background: #dcfce7; color: #166534; }
+QLabel#section { font-weight: bold; color: #374151; }
+QLineEdit, QComboBox { background: #ffffff; border: 1px solid #cfd6df; border-radius: 6px; padding: 5px 8px; }
+QLineEdit:focus, QComboBox:focus { border-color: #2563eb; }
+QListWidget#folders { background: #ffffff; border: 1px solid #cfd6df; border-radius: 6px; }
+QPushButton { background: #ffffff; border: 1px solid #cfd6df; border-radius: 6px; padding: 6px 14px; }
+QPushButton:hover { background: #f0f4fa; }
+QPushButton:disabled { color: #9ca3af; }
+QPushButton#primary { background: #2563eb; border: none; color: #ffffff; font-weight: bold; padding: 8px 22px; }
+QPushButton#primary:hover { background: #1d4ed8; }
+QPushButton#stop { color: #b91c1c; }
+QCheckBox { spacing: 8px; }
+QPlainTextEdit#log { background: #111827; color: #d1fae5; border: none; border-radius: 8px; padding: 8px;
+                    font-family: Consolas, 'Microsoft JhengHei UI'; font-size: 9.5pt; }
+QSplitter::handle { background: transparent; }
+'''
 
 
 def conda_exe():
@@ -66,7 +98,10 @@ class CalibrationCenter(QMainWindow):
         self.process = None
         self.queue = []
 
+        self.setStyleSheet(STYLE)
         self.methods = QListWidget()
+        self.methods.setObjectName('nav')
+        self.methods.setFixedWidth(290)
         self.pages = QStackedWidget()
         self._add_header('內參（每台相機各做一次）')
         self._add_window_method('即時拍攝棋盤格', CAL / 'calibrate.py',
@@ -76,74 +111,103 @@ class CalibrationCenter(QMainWindow):
                                 '開啟單台內參工具，在「從照片校正」填相機序號後讀取該台相機的照片資料夾。每台相機各做一次，最後在第 4 區指定正面／側面。')
         self._add_header('外參（選一種方法）')
         self._add_roma()
-        self._add_window_method('校正桿手點（學姊方法，baseline）', CAL / 'calibrate.py',
+        self._add_window_method('校正桿手點（學姊方法）', CAL / 'calibrate.py',
                                 '開啟校正精靈：兩台內參 → 雙機拍校正桿 → 左右各點 6 個球心 → RANSAC 求 F。'
-                                '已有內參時可勾「沿用這兩台已有內參」直接做外參。')
-        self._add_window_method('校正桿 3D 驗證（學姊 03，340 mm 尺度）', ROOT_DIR / 'Src' / 'legacy' / 'calibration' / '03_3d.py',
-                                '讀取校正桿外參的標註點，以第 1、4 球實距 340 mm 換算尺度並畫出 3D 點。需先完成「校正桿手點」。')
+                                '已有內參時可勾「沿用這兩台已有內參」直接做外參。', tag=('baseline', 'baseline'))
+        self._add_window_method('校正桿 3D 驗證（學姊 03）', ROOT_DIR / 'Src' / 'legacy' / 'calibration' / '03_3d.py',
+                                '讀取校正桿外參的標註點，以第 1、4 球實距 340 mm 換算尺度並畫出 3D 點。需先完成「校正桿手點」。',
+                                tag=('baseline', 'baseline'))
         self._add_chessboard()
         self._add_cross()
         self.methods.currentRowChanged.connect(self.pages.setCurrentIndex)
 
         self.log = QPlainTextEdit()
+        self.log.setObjectName('log')
         self.log.setReadOnly(True)
+        self.log.setPlaceholderText('執行訊息會顯示在這裡')
         self.stop_button = QPushButton('停止')
+        self.stop_button.setObjectName('stop')
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop)
 
-        right = QWidget()
-        rlayout = QVBoxLayout(right)
-        rlayout.addWidget(self.pages, 1)
-        top = QSplitter(Qt.Horizontal)
-        top.addWidget(self.methods)
-        top.addWidget(right)
-        top.setSizes([320, 680])
         bottom = QWidget()
         blayout = QVBoxLayout(bottom)
+        blayout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        row.addWidget(QLabel('執行訊息'))
+        section = QLabel('執行訊息')
+        section.setObjectName('section')
+        row.addWidget(section)
         row.addStretch()
         row.addWidget(self.stop_button)
         blayout.addLayout(row)
         blayout.addWidget(self.log)
-        main = QSplitter(Qt.Vertical)
-        main.addWidget(top)
-        main.addWidget(bottom)
-        main.setSizes([430, 290])
-        self.setCentralWidget(main)
+        right = QSplitter(Qt.Vertical)
+        right.addWidget(self.pages)
+        right.addWidget(bottom)
+        right.setSizes([470, 230])
+        holder = QWidget()
+        hlayout = QVBoxLayout(holder)
+        hlayout.setContentsMargins(18, 18, 18, 18)
+        hlayout.addWidget(right)
+        root = QWidget()
+        root.setObjectName('root')
+        layout = QHBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.methods)
+        layout.addWidget(holder, 1)
+        self.setCentralWidget(root)
         self.methods.setCurrentRow(1)
 
     # ---------- 方法清單 ----------
     def _add_header(self, title):
         item = QListWidgetItem(title)
         item.setFlags(Qt.NoItemFlags)
-        font = item.font()
+        font = QFont()
         font.setBold(True)
+        font.setPointSize(9)
         item.setFont(font)
+        item.setForeground(QColor('#6b7280'))
+        item.setSizeHint(QSize(0, 40 if self.methods.count() else 30))
         self.methods.addItem(item)
         self.pages.addWidget(QWidget())
 
-    def _page(self, title, description):
+    def _page(self, title, description, tag=None):
+        """右側的白色卡片：標題（＋標籤）、灰底說明，回傳卡片內的版面供各方法加欄位"""
         page = QWidget()
-        layout = QVBoxLayout(page)
-        head = QLabel(title)
-        font = head.font()
-        font.setBold(True)
-        font.setPointSize(font.pointSize() + 2)
-        head.setFont(font)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = QFrame()
+        card.setObjectName('card')
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+        head = QHBoxLayout()
+        name = QLabel(title)
+        name.setObjectName('title')
+        head.addWidget(name)
+        if tag:
+            label = QLabel(tag[1])
+            label.setObjectName('tag')
+            label.setProperty('kind', tag[0])
+            head.addWidget(label)
+        head.addStretch()
+        layout.addLayout(head)
         text = QLabel(description)
+        text.setObjectName('desc')
         text.setWordWrap(True)
-        layout.addWidget(head)
         layout.addWidget(text)
+        outer.addWidget(card)
         return page, layout
 
     def _add_method(self, title, page):
-        self.methods.addItem(QListWidgetItem('  ' + title))
+        self.methods.addItem(QListWidgetItem(title))
         self.pages.addWidget(page)
 
-    def _add_window_method(self, title, script, description):
-        page, layout = self._page(title, description)
+    def _add_window_method(self, title, script, description, tag=None):
+        page, layout = self._page(title, description, tag)
         button = QPushButton('開啟')
+        button.setObjectName('primary')
         button.clicked.connect(lambda: self.open_window(script))
         layout.addWidget(button, 0, Qt.AlignLeft)
         layout.addStretch()
@@ -154,8 +218,9 @@ class CalibrationCenter(QMainWindow):
             'RoMa（不需道具，用當天的錄影）',
             '用正面、側面同時拍的錄影畫面直接求外參，不需校正桿或棋盤格。加入當天的錄影資料夾（每球或整天都可以），'
             '程式會檢查是否有某一球前後相機被移動。內參沿用 Db/Calibration 現有的（先完成內參）。'
-            '研究測試中；第一次執行會下載模型權重（需要網路）。')
+            '第一次執行會下載模型權重（需要網路）。', tag=('research', '研究測試中'))
         self.roma_folders = QListWidget()
+        self.roma_folders.setObjectName('folders')
         self.roma_folders.setMaximumHeight(110)
         add = QPushButton('加入錄影資料夾…')
         remove = QPushButton('移除選取')
@@ -178,10 +243,11 @@ class CalibrationCenter(QMainWindow):
         for box in (self.roma_save, self.roma_snapshot, self.roma_region):
             layout.addWidget(box)
         run = QPushButton('開始計算')
+        run.setObjectName('primary')
         run.clicked.connect(self.run_roma)
         layout.addWidget(run, 0, Qt.AlignLeft)
         layout.addStretch()
-        self._add_method('RoMa（不需道具，研究測試中）', page)
+        self._add_method('RoMa（不需道具）', page)
 
     def _roma_add(self):
         folder = QFileDialog.getExistingDirectory(self, '選擇錄影資料夾', str(DB_DIR / 'Record'))
@@ -190,10 +256,10 @@ class CalibrationCenter(QMainWindow):
 
     def _add_chessboard(self):
         page, layout = self._page(
-            '棋盤格 PnP／8Points（同學方法）',
+            '棋盤格 PnP／8Points',
             '兩台相機同時拍的棋盤格照片（資料夾內含 cf、cs 兩個子資料夾、同名照片）。先各自算內參，再求雙機外參；'
             '棋盤每格 100 mm 提供真實尺度。結果寫到 Db/Calibration/chessboard/，3D 分頁選「PnP／8Points」時使用。'
-            '注意：只適用拍棋盤那天的相機位置。')
+            '注意：只適用拍棋盤那天的相機位置。', tag=('classmate', '同學方法'))
         self.cb_images = FolderField(DB_DIR / 'Record')
         self.cb_method = QComboBox()
         for label, value in (('兩種都算', 'both'), ('PnP', 'pnp'), ('8Points', '8point')):
@@ -203,16 +269,17 @@ class CalibrationCenter(QMainWindow):
         form.addRow('外參方法', self.cb_method)
         layout.addLayout(form)
         run = QPushButton('開始計算')
+        run.setObjectName('primary')
         run.clicked.connect(self.run_chessboard)
         layout.addWidget(run, 0, Qt.AlignLeft)
         layout.addStretch()
-        self._add_method('棋盤格 PnP／8Points（同學方法）', page)
+        self._add_method('棋盤格 PnP／8Points', page)
 
     def _add_cross(self):
         page, layout = self._page(
-            '粉紅球十字架 PnP（同學方法）',
+            '粉紅球十字架 PnP',
             '8 顆粉紅球十字架的照片（資料夾內含 cf、cs）。自動偵測球心並以已知球距求公制外參，結果另存到 '
-            'Db/Calibration/cross_pnp/<時間>/，不覆蓋現行校正。長焦相機需要正確的內參。')
+            'Db/Calibration/cross_pnp/<時間>/，不覆蓋現行校正。長焦相機需要正確的內參。', tag=('classmate', '同學方法'))
         self.cross_images = FolderField(DB_DIR / 'Record')
         self.cross_intrinsics = FolderField(INTRINSICS_JSON, pick_file=True, start=INTRINSICS_JSON.parent)
         form = QFormLayout()
@@ -220,10 +287,11 @@ class CalibrationCenter(QMainWindow):
         form.addRow('內參檔', self.cross_intrinsics)
         layout.addLayout(form)
         run = QPushButton('開始計算')
+        run.setObjectName('primary')
         run.clicked.connect(self.run_cross)
         layout.addWidget(run, 0, Qt.AlignLeft)
         layout.addStretch()
-        self._add_method('粉紅球十字架 PnP（同學方法）', page)
+        self._add_method('粉紅球十字架 PnP', page)
 
     # ---------- 執行 ----------
     def write(self, text):
