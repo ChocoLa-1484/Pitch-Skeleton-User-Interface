@@ -1,7 +1,7 @@
 """RoMa 外參校正：不需校正道具，直接用正面（CF）與側面（CS）同時拍的錄影畫面求 F。
 
 研究測試中（2026-10-13）。做法：每支錄影取幾幀，RoMa 稠密匹配兩台相機的畫面 → 每對用 MAGSAC 去除錯誤匹配
-→ 全部合併再求一次 F。結果的方向慣例和 02_ransac_8points.py 相同（x_front^T F x_side = 0），主程式可直接使用。
+→ 全部合併再求一次 F。結果的方向慣例和 calibrate.py 的校正桿外參相同（x_front^T F x_side = 0），主程式可直接使用。
 
 需在 Roma 環境執行（安裝方式見 docs/CALIBRATION.md 第 7 節），第一次執行會自動下載模型權重（需網路）：
     conda activate Roma
@@ -27,7 +27,7 @@ import numpy as np
 
 from Src.calibration import calib_store
 
-THRESHOLD_PX = 1.0         # MAGSAC 內點門檻，與 02_ransac_8points.py 相同
+THRESHOLD_PX = 1.0         # MAGSAC 內點門檻（px）
 SAMPLES_PER_PAIR = 5000    # 每對畫面取樣的匹配點數
 UPSAMPLE = (1088, 1920)    # 接近原圖比例的解析度；預設 864x864 單對結果較不穩
 REGION_GROW = 0.3          # 投手範圍：CS 骨架框聯集往外擴 30%
@@ -161,7 +161,7 @@ def main(argv=None):
             print(f'  {os.path.basename(folder)}：{m:.2f} px{flag}')
         print(f'  整體中位數 {overall:.2f} px')
 
-    F = F_cs_cf.T                                   # 轉成 x_front^T F x_side = 0（同 02_ransac_8points.py）
+    F = F_cs_cf.T                                   # 轉成 x_front^T F x_side = 0（同 calibrate.py）
     F = F / F[2, 2]
     print(f'\nF（x_front^T F x_side = 0）：\n{np.array2string(F, precision=6)}')
     print(f'合併後內點 {int(mask.sum())}/{len(mask)}')

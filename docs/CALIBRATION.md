@@ -24,7 +24,7 @@
 | `Src/calibration/chessboard_cross/` | 同學（ChocoLa-1484）的公制方法：棋盤格內外參、8 顆螢光球十字架、螢光球提取 |
 | `Src/calibration/roma/` | RoMa 外參（第 7 節）：`roma_extrinsic.py`（指令）、`roma_extrinsic_gui.py`（視窗，`start_roma.bat` 啟動） |
 | `Src/tools/measure_stride_pnp.py`、`measure_stride_8point.py` | 跨步量測（使用棋盤格 `stereo.json`） |
-| `Src/legacy/calibration/` | 學姊的舊分步工具 `01`／`02`／`03`（已由 `calibrate.py` 取代，保留可執行） |
+| `Src/legacy/calibration/` | 學姊的 `03_3d.py`：校正桿 3D 驗證（01、02 已整合進 `calibrate.py`，2026-10-20 刪除） |
 
 舊設備工具（`calib_extrin.py`、`calib_from_folder.py`、`extract_calib.py`、`calibrated_3d_viewer.py`、`view_3d_animation.py`）主程式沒用到，已刪除，需要時可從 git 歷史找回。
 
@@ -50,8 +50,7 @@ python .\Src\calibration\calibrate.py
 ```
 python Src/calibration/calib.py                        # 1. 每台相機內參，並指定角色
 python Src/UI_Control/main.py                         # 2.「2D 相機」分頁拍校正桿照片
-python Src/legacy/calibration/01_ball_detect_manual.py # 3. 舊分步工具：標註
-python Src/legacy/calibration/02_ransac_8points.py      # 4. 舊分步工具：F 矩陣
+python Src/calibration/calibrate.py                   # 3–4. 標註球心、計算 F（原 01、02，已整合）
 python Src/legacy/calibration/03_3d.py                 # 5.（選用）舊尺度驗證
 ```
 
@@ -89,8 +88,7 @@ python -m unittest discover -s Src/UI_Control/tests -v
 | 1. 內參（每台各做一次） | `python Src/calibration/calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
 | 2. 指定正面/側面 | `calib.py` 第 4 區 → 儲存角色 | — | `camera_roles.json` |
 | 3. 拍外參照片 | `python Src/UI_Control/main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Record\Calibrate_Picture\cf\`、`cs\` |
-| 4. 標註對應點 | `python Src/legacy/calibration/01_ball_detect_manual.py`（先正面再側面，每張 6 點，滾輪換張） | — | `extrinsic\selected_points_cf.json`、`_cs.json` |
-| 5. 算 F 矩陣 | `python Src/legacy/calibration/02_ransac_8points.py` | — | `extrinsic\fundamental.json` |
+| 4–5. 標註對應點、算 F 矩陣 | `start_calibrate.bat`（`calibrate.py`）校正桿流程：左右各點 6 個球心 → RANSAC 求 F（原 `01`、`02` 已整合並刪除） | — | `extrinsic\selected_points_*.json`、`extrinsicundamental.json` |
 | 6. 驗證 | `python Src/legacy/calibration/03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
 
 **注意事項**
@@ -560,7 +558,7 @@ python Src/UI_Control/main_metric.py --check --frame 115 --annotations path/to/a
 
 > 2026-10-13 加入，尚在測試，還沒取代校正桿／棋盤格流程。
 
-**做法**：RoMa（CVPR 2024）是稠密影像匹配模型，可以直接在正面、側面兩台相機「同一時間」的畫面之間找出大量對應點，不需要校正桿、棋盤格或手點。`roma_extrinsic.py` 從每一球的錄影取幾幀，用 MAGSAC 去除錯誤匹配，合併所有球後求一個 F。F 的方向慣例與 `02_ransac_8points.py` 相同（`x_front^T F x_side = 0`），主程式可直接使用。
+**做法**：RoMa（CVPR 2024）是稠密影像匹配模型，可以直接在正面、側面兩台相機「同一時間」的畫面之間找出大量對應點，不需要校正桿、棋盤格或手點。`roma_extrinsic.py` 從每一球的錄影取幾幀，用 MAGSAC 去除錯誤匹配，合併所有球後求一個 F。F 的方向慣例與 `calibrate.py` 的校正桿外參相同（`x_front^T F x_side = 0`），主程式可直接使用。
 
 **用途**：
 - 不帶道具重新求外參，例如相機被碰過、或忘了拍校正照片時，直接用當天的錄影算。

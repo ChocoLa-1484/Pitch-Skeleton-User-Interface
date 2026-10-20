@@ -9,9 +9,9 @@
     │   ├─ intrinsics_all.json      所有相機內參，以序號為鍵（calib.py）
     │   └─ calib_SN<序號>.npz        單台完整校正資料（calib.py）
     └─ extrinsic/
-        ├─ selected_points_cf.json  正面標註點（legacy/calibration/01_ball_detect_manual.py 或 calibrate.py）
-        ├─ selected_points_cs.json  側面標註點（legacy/calibration/01_ball_detect_manual.py 或 calibrate.py）
-        └─ fundamental.json         F 矩陣（calibrate.py、legacy 02_ransac_8points.py，或 roma/roma_extrinsic.py --save）
+        ├─ selected_points_cf.json  正面標註點（calibrate.py）
+        ├─ selected_points_cs.json  側面標註點（calibrate.py）
+        └─ fundamental.json         F 矩陣（calibrate.py，或 roma/roma_extrinsic.py --save）
 
 路徑以本檔位置推算，不受執行時所在目錄影響。
 """
@@ -142,7 +142,7 @@ def load_stereo_calibration():
 
     fund = load_fundamental()
     if fund is None:
-        return None, f"找不到 {FUNDAMENTAL_JSON}（請先執行 02_ransac_8points.py）"
+        return None, f"找不到 {FUNDAMENTAL_JSON}（請先用 start_calibrate.bat 完成校正桿外參，或用 start_roma.bat 計算外參）"
     if (fund.get("front"), fund.get("side")) != (front, side):
         return None, (f"F 矩陣是用 front={fund.get('front')} side={fund.get('side')} 算的，"
                       f"與目前角色 front={front} side={side} 不符，請重新執行 02")
