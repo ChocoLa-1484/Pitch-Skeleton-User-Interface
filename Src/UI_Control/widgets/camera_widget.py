@@ -16,6 +16,7 @@ from Src.paths import DB_DIR
 from Src.UI_Control.forms.camera_ui import Ui_camera_ui
 from datetime import datetime
 from Src.cameras.video_control import Camera
+from Src.UI_Control.widgets.camera_settings import CameraSettingsPanel
 
 class PoseCameraTabControl(QWidget):
     def __init__(self, parent=None):
@@ -26,6 +27,75 @@ class PoseCameraTabControl(QWidget):
         # self.init_pose_estimater()
         self.initVar()
         self.bindUI()
+
+    def configure_settings(self, pitch_tab, sources):
+        """Keep the live camera controls and 2D preferences in one place."""
+        self.pitch_tab = pitch_tab
+        self._sharing_pitch_preview = False
+        self.ui.settingGroupBox.setTitle("相機與 2D 設定")
+        self.ui.settingGroupBox.setMinimumSize(440, 0)
+        self.ui.settingGroupBox.setMaximumWidth(480)
+        self.ui.displayGroupbox.hide()  # This preview tab has no pose estimator.
+        self.ui.CameraSettingGroupBox.setTitle("相機預覽／拍照")
+        for view in (self.ui.FrameView, self.ui.FrameView_2):
+            view.setMinimumSize(280, 240)
+        self.ui.horizontalLayout_2.setStretch(0, 1)
+        self.ui.horizontalLayout_2.setStretch(1, 1)
+
+        # Move the actual controls so the analysis tab keeps its existing signal
+        # bindings and reads the same values during playback and recording.
+        preferences = QGroupBox("2D 回放與錄影")
+        form = QFormLayout(preferences)
+        for label, control in (("回放速率", pitch_tab.ui.slowMotionInput),
+                               ("回放後等待（秒）", pitch_tab.ui.comboBox),
+                               ("錄影幀率", pitch_tab.recordRateCombo)):
+            form.addRow(label, control)
+        pitch_tab.ui.slowMotionInput.setToolTip("調整「2D」分頁的影片回放速度。")
+        pitch_tab.ui.comboBox.setToolTip("原「更新速率」：回放結束後，等待幾秒再返回即時畫面。")
+        pitch_tab.recordRateCombo.setToolTip("套用到「2D」分頁的投球錄影。")
+        for label in (pitch_tab.ui.label, pitch_tab.ui.label_5,
+                      pitch_tab.ui.label_6, pitch_tab.recordRateLabel):
+            label.hide()
+
+        hardware = QGroupBox("曝光、調色與鏡頭")
+        self.settings_panel = CameraSettingsPanel(sources, hardware)
+        QVBoxLayout(hardware).addWidget(self.settings_panel)
+        self.ui.verticalLayout_7.insertWidget(1, preferences)
+        self.ui.verticalLayout_7.insertWidget(2, hardware)
+
+        # The controls remain usable on laptops without forcing a tall window.
+        self.ui.horizontalLayout_4.removeWidget(self.ui.settingGroupBox)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMinimumWidth(465)
+        scroll.setMaximumWidth(505)
+        scroll.setWidget(self.ui.settingGroupBox)
+        self.ui.horizontalLayout_4.addWidget(scroll)
+        self.preview_timer = QTimer(self)
+        self.preview_timer.timeout.connect(self._sync_pitch_preview)
+        self.preview_timer.start(250)
+
+    def _sync_pitch_preview(self):
+        # Reuse the displayed scenes, without consuming the analysis camera's
+        # frame queues. Settings remain visible beside the active live preview.
+        shared = self.pitch_tab.camera.is_opened and not self.camera.is_opened
+        self.ui.cameraCheckBox.setEnabled(not shared)
+        self.ui.recordCheckBox.setEnabled(not shared)
+        self.ui.pictureButton.setEnabled(not shared)
+        if shared:
+            for view, source in ((self.ui.FrameView, self.pitch_tab.ui.FrameView),
+                                 (self.ui.FrameView_2, self.pitch_tab.ui.FrameView_2)):
+                scene = source.scene()
+                view.setScene(scene)
+                if scene is not None and scene.items():
+                    view.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+            self.ui.ResolutionLabel.setText("目前顯示「2D」使用中的相機；可直接在右側調整設定。")
+        elif self._sharing_pitch_preview:
+            self.ui.FrameView.setScene(self.camera_scene)
+            self.ui.FrameView_2.setScene(self.camera_scene_2)
+            self.ui.ResolutionLabel.setText("請開啟相機以預覽畫面。")
+        self._sharing_pitch_preview = shared
 
     def initVar(self):
         """Initialize variables and timer."""

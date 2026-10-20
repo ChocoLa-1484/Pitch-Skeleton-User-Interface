@@ -19,6 +19,7 @@ import json
 import re
 import base64
 from Src.UI_Control.forms.video_ui_compare import Ui_video_widget
+from Src.UI_Control.widgets.compare_video_dialog import CompareVideoDialog, validate_comparison_paths
 from Src.UI_Control.rendering.vis_image_3d import ImageDrawer
 from Src.UI_Control.controllers.selector import PersonSelector, KptSelector
 from Src.cameras.video_control import VideoLoader, JsonLoader, KeyframeJsonLoader
@@ -28,8 +29,6 @@ from Src.analysis.analyze_3d import PoseAnalyzer
 from Src.pose.model import Model
 import pyqtgraph as pg
 from Src.UI_Control.viewers.triangulate_3d_viewer import Triangulate3DViewer
-import time
-from Src.pose.offline_skeleton_detector import OfflineSkeletonDetector
 import math
 
 class SliderColorOverlay(QWidget):
@@ -206,10 +205,111 @@ class PoseVideoCompareTabControl(QWidget):
         super(PoseVideoCompareTabControl, self).__init__(parent)
         self.ui = Ui_video_widget()
         self.ui.setupUi(self)
+        self._setup_comparison_guidance()
         self.model = model
         self.initVar()
         self.setupComponents()
         self.bindUI()
+        self._setup_keyframe_editors()
+        self.initGraph()
+
+    def _setup_comparison_guidance(self):
+        self.ui.startCodeBtn.hide()
+        self.ui.loadOriginalVideoBtn.setText("載入 2D 比較影片…")
+        self.ui.loadProcessedVideoBtn.setText("載入 3D 比較影片…")
+        hint = QLabel("上組 A、下組 B：兩次不同投球；每組左正面 CF、右側面 CS。請載入同次投球的同步影片與既有分析 JSON。")
+        hint.setWordWrap(True)
+        self.ui.verticalLayout_5.insertWidget(1, hint)
+        self.comparison_path_fields = []
+        for layout, group, front, side in (
+                (self.ui.horizontalLayout_7, "上組 A", self.ui.FrameView, self.ui.FrameView_2),
+                (self.ui.horizontalLayout_5, "下組 B", self.ui.FrameView_3, self.ui.FrameView_4)):
+            layout.removeWidget(front)
+            layout.removeWidget(side)
+            for index, (role, view) in enumerate((("正面 CF", front), ("側面 CS", side))):
+                column = QVBoxLayout()
+                title = QLabel(f"{group} · {role}")
+                column.addWidget(title)
+                path = QLineEdit()
+                path.setReadOnly(True)
+                path.setPlaceholderText(f"尚未載入{role}影片")
+                path.setToolTip("載入後顯示影片位置；可選取複製完整路徑。")
+                column.addWidget(path)
+                column.addWidget(view, 1)
+                layout.insertLayout(index, column, 1)
+                self.comparison_path_fields.append(path)
+        self.ui.NameLabel.setText("上組 A：")
+        self.ui.NameLabel_2.setText("下組 B：")
+        self.ui.horizontalLayout_22.insertWidget(0, QLabel("上組 A"))
+        self.ui.horizontalLayout_9.insertWidget(0, QLabel("下組 B"))
+        self.ui.horizontalLayout_3.insertWidget(3, QLabel("同步拖曳"))
+        self.ui.frameSlider.setToolTip("同時移動上下兩組，保留目前的對齊差距。上／下組拉桿可分別定位。")
+        self.ui.frameSlider_2.setToolTip("只調整上組 A 的正面、側面影片。")
+        self.ui.frameSlider_3.setToolTip("只調整下組 B 的正面、側面影片。")
+        self.ui.graph_widget.setMinimumHeight(190)
+        self.graph_status = QLabel("肩髖分離角度比較：載入兩組影片後顯示曲線。")
+        self.ui.verticalLayout_5.insertWidget(
+            self.ui.verticalLayout_5.indexOf(self.ui.graph_widget), self.graph_status)
+        self.ui.verticalLayout_5.setStretch(self.ui.verticalLayout_5.indexOf(self.ui.graph_widget), 2)
+        for view in (self.ui.FrameView, self.ui.FrameView_2, self.ui.FrameView_3, self.ui.FrameView_4):
+            view.setMinimumSize(280, 180)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        for label in self.findChildren(QLabel):
+            if label.font().pointSize() > 14:
+                font = label.font()
+                font.setPointSize(11)
+                label.setFont(font)
+
+    def _setup_keyframe_editors(self):
+        self.keyframe_edits = {}
+        rows = ((self.ui.horizontalLayout_2, self.ui.horizontalLayout_10, self.ui.horizontalLayout_13),
+                (self.ui.horizontalLayout_14, self.ui.horizontalLayout_18, self.ui.horizontalLayout_19))
+        for group, layouts in enumerate(rows):
+            for event, layout in zip(("foot_contact_frame", "max_shoulder_angle_frame", "wrist_speed_frame"), layouts):
+                spin = QSpinBox()
+                spin.setRange(-1, -1)
+                spin.setSpecialValueText("未標記")
+                spin.setPrefix("幀 ")
+                spin.setKeyboardTracking(False)
+                spin.setToolTip("微調此組關鍵幀，僅用於本次比較。")
+                spin.setEnabled(False)
+                spin.valueChanged.connect(lambda value, g=group, e=event: self._edit_keyframe(g, e, value))
+                layout.addWidget(spin)
+                self.keyframe_edits[group, event] = spin
+
+    def _edit_keyframe(self, group, event, value):
+        setattr(self, event + ("_2" if group else ""), value if value >= 0 else None)
+        self._sync_keyframe_controls()
+        metrics = ((self.ui.FC_label, self.ui.MER_label_3, self.ui.BR_label_3),
+                   (self.ui.FC_label_3, self.ui.MER_label_4, self.ui.BR_label_7))
+        metric = metrics[group][("foot_contact_frame", "max_shoulder_angle_frame", "wrist_speed_frame").index(event)]
+        metric.setText("—")
+        metric.setToolTip("關鍵幀已調整；此幀的量測值需重新分析。")
+        self._update_phase_visualization()
+        if value >= 0:
+            (self.ui.frameSlider_2, self.ui.frameSlider_3)[group].setValue(value)
+        self._update_graph()
+
+    def _sync_keyframe_controls(self):
+        for group, (loader, buttons, labels) in enumerate((
+                (self.video_loader, (self.ui.footContact_ptn, self.ui.maxER_ptn, self.ui.release_ptn),
+                 (self.ui.footContact_label, self.ui.maxER_label, self.ui.release_label)),
+                (self.video_loader_2, (self.ui.footContact_ptn_2, self.ui.maxER_ptn_2, self.ui.release_ptn_2),
+                 (self.ui.footContact_label_2, self.ui.maxER_label_2, self.ui.release_label_2)))):
+            total = int(loader.total_frames or 0)
+            for event, button, label in zip(("foot_contact_frame", "max_shoulder_angle_frame", "wrist_speed_frame"), buttons, labels):
+                frame = getattr(self, event + ("_2" if group else ""))
+                valid = isinstance(frame, int) and 0 <= frame < total
+                button.setEnabled(valid)
+                button.setMinimumHeight(28)
+                label.setText("")  # The editable frame field displays the number.
+                spin = self.keyframe_edits[group, event]
+                spin.blockSignals(True)
+                spin.setRange(-1, max(-1, total - 1))
+                spin.setValue(frame if valid else -1)
+                spin.setEnabled(total > 0)
+                spin.blockSignals(False)
         
     def initVar(self):
         self.is_play = False
@@ -320,20 +420,15 @@ class PoseVideoCompareTabControl(QWidget):
         self.show_br_points = False  # 是否顯示釋放點
         self.mer_locked = False
         self.release_locked = False
-        # playback pointers for independent group playback
-        self._current_play_frame_group1 = 0
-        self._current_play_frame_group2 = 0
         self._play_timer = None
 
     def resizeEvent(self, event):
-        new_size = event.size()
-        
-        # 重新縮放關鍵幀 QGraphicsView 以適應窗口大小
-        if hasattr(self.ui, 'fcView') and hasattr(self.ui, 'merView') and hasattr(self.ui, 'brView'):
-            for view_widget in [self.ui.fcView, self.ui.merView, self.ui.brView]:
-                self._fit_view_no_crop(view_widget)
-        
-        super().resizeEvent(event)  
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._refit_comparison_views)
+
+    def _refit_comparison_views(self):
+        for view in (self.ui.FrameView, self.ui.FrameView_2, self.ui.FrameView_3, self.ui.FrameView_4):
+            self._fit_view_no_crop(view)
 
     def _fit_view_no_crop(self, view_widget: QGraphicsView):
         """不裁切模式下，將影像盡量放大並靠左上顯示。"""
@@ -345,28 +440,17 @@ class PoseVideoCompareTabControl(QWidget):
         view_widget.fitInView(view_widget.scene().sceneRect(), Qt.KeepAspectRatio)
 
     def initFrameSlider(self, total_frames, frameSlider, frameNumLabel):
-        """初始化影片滑桿和相關的標籤。"""
-        frameSlider.setMinimum(0)
-        frameSlider.setMaximum(total_frames - 1)
+        frameSlider.blockSignals(True)
+        frameSlider.setRange(0, max(0, int(total_frames or 0) - 1))
         frameSlider.setValue(0)
-        frameNumLabel.setText(f'0/{total_frames - 1}')
+        frameSlider.blockSignals(False)
+        frameNumLabel.setText(f'0/{frameSlider.maximum()}')
 
     def initGraph(self):
-        """初始化圖表和模型設定。"""
-        total_frames = self.video_loader.total_frames
-        self.graph_plotter._init_graph(total_frames) 
-        # 启用肩峰連線與髖關節連線角度曲线显示 (state=2 表示启用，state=0 表示禁用)
-        self.toggleShowGraph("ankle_speed", 0)
-        self.toggleShowGraph("left_knee_3d", 0)
-        self.toggleShowGraph("shoulder_hiple_angle", 2)
-        self.toggleShowGraph("shoulder_angle", 0)
-        self.toggleShowGraph("wrist_speed", 0)
-        self.toggleShowGraph("ankle_x_diff", 0)
-        # 显示图表
-        if hasattr(self.ui, 'graph_widget'):
-            self.showGraph(self.ui.graph_widget)
-        # 第一次绘制更新图表
-        self.graph_plotter.updateGraph(0)
+        self.graph_plotter._init_graph(max(1, int(self.video_loader.total_frames or 0)))
+        self.graph_plotter.zoomIn(self.ui.frameSlider.minimum(), self.ui.frameSlider.maximum())
+        self.showGraph(self.ui.graph_widget)
+        self._update_graph()
 
     def resetPhaseDetection(self):
         self.ui.footContact_ptn.setDisabled(True)
@@ -425,24 +509,12 @@ class PoseVideoCompareTabControl(QWidget):
         self.ui.maxER_ptn_2.setDisabled(True)
         self.ui.release_ptn_2.setDisabled(True)
 
-        self.ui.footContact_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_2.setValue(self.foot_contact_frame)
-        )
-        self.ui.maxER_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_2.setValue(self.max_shoulder_angle_frame)
-        )  
-        self.ui.release_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_2.setValue(self.wrist_speed_frame)
-        )
-        self.ui.footContact_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_3.setValue(self.foot_contact_frame_2)
-        )
-        self.ui.maxER_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_3.setValue(self.max_shoulder_angle_frame_2)
-        )  
-        self.ui.release_ptn.clicked.connect(
-            lambda: self.ui.frameSlider_3.setValue(self.wrist_speed_frame_2)
-        )
+        for slider, buttons, suffix in (
+                (self.ui.frameSlider_2, (self.ui.footContact_ptn, self.ui.maxER_ptn, self.ui.release_ptn), ""),
+                (self.ui.frameSlider_3, (self.ui.footContact_ptn_2, self.ui.maxER_ptn_2, self.ui.release_ptn_2), "_2")):
+            for button, event in zip(buttons, ("foot_contact_frame", "max_shoulder_angle_frame", "wrist_speed_frame")):
+                button.clicked.connect(lambda checked=False, sl=slider, attr=event + suffix:
+                                       self._jump_to_keyframe(sl, attr))
 
         self.checkBox(False)
 
@@ -466,7 +538,6 @@ class PoseVideoCompareTabControl(QWidget):
         # self.ui.KptTable.cellActivated.connect(self.kpt_table.onCellClicked)
         self.ui.FrameView.mousePressEvent = self.mousePressEvent
         # self.ui.IdCorrectBtn.clicked.connect(self.correctId)
-        self.ui.startCodeBtn.clicked.connect(self.toggleDetect)
         self.ui.selectCheckBox.stateChanged.connect(self.toggleSelect)
         self.ui.showSkeletonCheckBox.stateChanged.connect(self.toggleShowSkeleton)
         self.ui.selectKptCheckBox.stateChanged.connect(self.toggleKptSelect)
@@ -489,48 +560,82 @@ class PoseVideoCompareTabControl(QWidget):
         # if self.ui.vispy_widget.layout() is None:
         #     self.ui.vispy_widget.setLayout(QVBoxLayout())
 
+    def _jump_to_keyframe(self, slider, attribute):
+        frame = getattr(self, attribute)
+        if isinstance(frame, int):
+            slider.setValue(frame)
+
     def playBtnClicked(self):
-        if self.video_loader.video_name == "":
-            QMessageBox.warning(self, "無法播放影片", "請讀取影片!")
-            return
-        if self.video_loader.is_loading:
-            QMessageBox.warning(self, "影片讀取中", "請稍等!")
+        if any(loader.is_loading or not loader.total_frames
+               for loader in (self.video_loader, self.video_loader_2)):
+            QMessageBox.information(self, "無法播放", "請先完成上下兩組影片的載入。")
             return
         self.is_play = not self.is_play
         self.ui.playBtn.setText("||" if self.is_play else "▶︎")
         if self.is_play:
-            # Start playback using each group's current slider positions
             self.playFrame()
-        else:
-            # Stop the timer if playing is paused
-            if getattr(self, '_play_timer', None) is not None and self._play_timer.isActive():
-                self._play_timer.stop()
+        elif self._play_timer is not None:
+            self._play_timer.stop()
 
-    def _on_group1_slider_changed(self, frame_num: int):
-        self._update_group1_display(frame_num)
+    def _on_group1_slider_changed(self, frame_num):
+        self._on_independent_seek(0, frame_num)
 
-    def _on_group2_slider_changed(self, frame_num: int):
-        self._update_group2_display(frame_num)
+    def _on_group2_slider_changed(self, frame_num):
+        self._on_independent_seek(1, frame_num)
 
-    def _update_group1_display(self, frame_num: int):
-        if self.video_loader.total_frames is None or self.video_loader.total_frames <= 0:
+    def _on_independent_seek(self, group, frame_num):
+        # The two local sliders define the manual alignment. The master slider
+        # and playback then move both groups by the same number of frames.
+        self.compare_frame_offset = self.ui.frameSlider_3.value() - self.ui.frameSlider_2.value()
+        self._configure_master_slider(self.ui.frameSlider_2.value())
+        self._render_group(group, frame_num)
+        self._update_graph()
+
+    def _configure_master_slider(self, current_frame=0):
+        end1 = max(0, int(self.video_loader.total_frames or 0) - 1)
+        end2 = max(0, int(self.video_loader_2.total_frames or 0) - 1)
+        slider = self.ui.frameSlider
+        slider.blockSignals(True)
+        slider.setRange(min(0, -self.compare_frame_offset), max(end1, end2 - self.compare_frame_offset))
+        slider.setValue(current_frame)
+        slider.blockSignals(False)
+        self.graph_plotter.set_compare_frame_offset(self.compare_frame_offset)
+        self.graph_plotter.zoomIn(slider.minimum(), slider.maximum())
+
+    def _render_group(self, group, frame_num):
+        loader, drawers, estimators, scenes, views, slider, label = (
+            (self.video_loader, (self.image_drawer, self.image_drawer_2),
+             (self.pose_estimater, self.pose_estimater_2), (self.view_scene, self.curve_scene),
+             (self.ui.FrameView, self.ui.FrameView_2), self.ui.frameSlider_2, self.ui.frameNumLabel_2),
+            (self.video_loader_2, (self.image_drawer_3, self.image_drawer_4),
+             (self.pose_estimater_3, self.pose_estimater_4), (self.curve_scene_3, self.curve_scene_4),
+             (self.ui.FrameView_3, self.ui.FrameView_4), self.ui.frameSlider_3, self.ui.frameNumLabel_3)
+        )[group]
+        if not loader.total_frames:
             return
-        frame_num = max(0, min(int(frame_num), self.video_loader.total_frames - 1))
-        image, image_2 = self.video_loader.getVideoImage(frame_num)
-        self.showImage(image, self.view_scene, self.ui.FrameView)
-        self.showImage(image_2, self.curve_scene, self.ui.FrameView_2)
-        self.ui.frameNumLabel_2.setText(f'{frame_num}/{self.video_loader.total_frames - 1}')
-        self.ui.frameNumLabel.setText(f'{frame_num}/{self.video_loader.total_frames - 1}')
+        frame_num = max(0, min(int(frame_num), loader.total_frames - 1))
+        for index, (frame, drawer, estimator, scene, view) in enumerate(zip(
+                loader.getVideoImage(frame_num), drawers, estimators, scenes, views)):
+            drawn = drawer.drawInfo(frame, frame_num, estimator.kpt_buffer)
+            if index == 1 and self.show_br_points and self.br_points and drawn is not None:
+                drawn = self._draw_br_points(drawn)
+            self.showImage(drawn, scene, view, process_events=False)
+        slider.blockSignals(True)
+        slider.setValue(frame_num)
+        slider.blockSignals(False)
+        label.setText(f'{frame_num}/{loader.total_frames - 1}')
 
-    def _update_group2_display(self, frame_num: int):
-        total_frames = int(getattr(self.video_loader_2, 'total_frames', 0) or 0)
-        if total_frames <= 0:
+    def _refresh_current_frames(self):
+        self._render_group(0, self.ui.frameSlider_2.value())
+        self._render_group(1, self.ui.frameSlider_3.value())
+        self._update_graph()
+
+    def _update_graph(self):
+        if not hasattr(self, 'graph_plotter'):
             return
-        frame_num = max(0, min(int(frame_num), total_frames - 1))
-        image_3, image_4 = self.video_loader_2.getVideoImage(frame_num)
-        self.showImage(image_3, self.curve_scene_3, self.ui.FrameView_3)
-        self.showImage(image_4, self.curve_scene_4, self.ui.FrameView_4)
-        self.ui.frameNumLabel_3.setText(f'{frame_num}/{total_frames - 1}')
+        first, second = self.ui.frameSlider_2.value(), self.ui.frameSlider_3.value()
+        self.ui.frameNumLabel.setText(f'A {first} / B {second}')
+        self.graph_plotter.updateGraph(first, "上組 A", "下組 B", frame_num_2=second)
 
     def mousePressEvent(self, event):
         view_rect = self.ui.FrameView.rect()
@@ -573,6 +678,8 @@ class PoseVideoCompareTabControl(QWidget):
         self.video_loader_2 = VideoLoader(self.image_drawer_3, self.image_drawer_4)
 
         self.graph_plotter = GraphPlotter(self.pose_analyzer, self.pose_analyzer_3, speed_name=self.speed_angle_names, title_names=self.title_names)
+        for analyzer in (self.pose_analyzer, self.pose_analyzer_2, self.pose_analyzer_3, self.pose_analyzer_4):
+            analyzer.viewer3D.auto_save = False
 
         self.spin_direction_widget = SpinDirectionWidget()
         spin_layout = QVBoxLayout(self.ui.spinDirectionWidget)
@@ -588,7 +695,9 @@ class PoseVideoCompareTabControl(QWidget):
         if getattr(self, '_play_timer', None) is not None and self._play_timer.isActive():
             self._play_timer.stop()
         self.is_play = False
-        
+        self.ui.playBtn.setText("▶︎")
+        self.br_points = []
+        self.compare_frame_offset = 0
         self.resetPhaseDetection()
         # self.reset3DInfo()
         if self.viewer3d is not None:
@@ -608,8 +717,10 @@ class PoseVideoCompareTabControl(QWidget):
 
         self.pose_estimater_3.reset()
         self.pose_analyzer_3.reset()
+        self.pose_analyzer_3.reset()
         self.image_drawer_3.reset()
         self.pose_estimater_4.reset()
+        self.pose_analyzer_4.reset()
         self.pose_analyzer_4.reset()
         self.image_drawer_4.reset()
 
@@ -634,6 +745,21 @@ class PoseVideoCompareTabControl(QWidget):
             self.ui.brView.scene().deleteLater()
    
     def loadVideo(self, is_processed:bool = False, video_path:str = None, video_path_2:str = None, video_path_3:str = None, video_path_4:str = None):
+        if self.video_loader.is_loading or self.video_loader_2.is_loading:
+            QMessageBox.information(self, "影片讀取中", "請等待兩組影片載入完成後再選擇。")
+            return
+        paths = (video_path, video_path_2, video_path_3, video_path_4)
+        if not all(paths):
+            dialog = CompareVideoDialog(is_processed, paths, self)
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            paths = dialog.paths()
+        error = validate_comparison_paths(paths)
+        if error:
+            QMessageBox.warning(self, "無法載入比較影片", error)
+            return
+        # Commit all four selections together; cancel leaves the old comparison intact.
+        video_path, video_path_2, video_path_3, video_path_4 = paths
         if self.is_play:
             self.ui.playBtn.click()
         
@@ -642,86 +768,63 @@ class PoseVideoCompareTabControl(QWidget):
             if pose_est is not None:
                 pose_est.reset()
         
-        self.viewer3d = Triangulate3DViewer(self.K_S, self.K_F, self.F)
-        self.viewer3d_2 = Triangulate3DViewer(self.K_S, self.K_F, self.F)
+        self.viewer3d = self.pose_analyzer.viewer3D
+        self.viewer3d_2 = self.pose_analyzer_3.viewer3D
         self.is_processed = is_processed
         self.video_loader.loadVideo(video_path, video_path_2)
         self.video_loader_2.loadVideo(video_path_3, video_path_4)
+        for field, path in zip(self.comparison_path_fields, paths):
+            field.setText(os.path.abspath(path))
+            field.setToolTip(os.path.abspath(path))
+            field.setCursorPosition(0)
         self.checkVideoLoad()
-        self.ui.showSkeletonCheckBox.setChecked(False)
 
     def loadProcessedData(self):
-        self.setFrameOffset(-2)
-        keyframe_json_path = os.path.join(self.video_loader.folder_path, f"{os.path.splitext(self.video_loader.video_name)[0]}_keyframes.json")
-        keyframe_json_path_2 = os.path.join(self.video_loader_2.folder_path, f"{os.path.splitext(self.video_loader_2.video_name)[0]}_keyframes.json")
-        rapsodo_json_path = os.path.join(self.video_loader.folder_path, f"{os.path.splitext(self.video_loader.video_name_2)[0]}_BRandRapsodo.json")
-        rapsodo_json_path_2 = os.path.join(self.video_loader_2.folder_path, f"{os.path.splitext(self.video_loader_2.video_name_2)[0]}_BRandRapsodo.json")
-        self.display_keyframe_data_from_json(keyframe_json_path, keyframe_json_path_2, is_processed=True)
-        self.display_roi_from_json(rapsodo_json_path, self.ui.label_3, self.ui.label_8, self.ui.label_4, self.spin_direction_widget)
-        self.display_roi_from_json(rapsodo_json_path_2, self.ui.label_6, self.ui.label_7, self.ui.label_9, self.spin_direction_widget2)
-
-        json_loader = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name)
-        json_loader_2 = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name_2)
-        json_loader_3 = JsonLoader(self.video_loader_2.folder_path, self.video_loader_2.video_name)
-        json_loader_4 = JsonLoader(self.video_loader_2.folder_path, self.video_loader_2.video_name_2)
-
-        self.json_path, person_df = json_loader.load()
-        self.json_path2, person_df_2 = json_loader_2.load()
-        self.json_path3, person_df_3 = json_loader_3.load()
-        self.json_path4, person_df_4 = json_loader_4.load()
-
-        self.pose_estimater.setProcessedData(person_df)
-        self.pose_estimater_2.setProcessedData(person_df_2)
-        self.pose_estimater_3.setProcessedData(person_df_3)
-        self.pose_estimater_4.setProcessedData(person_df_4)
-
-        total_frames = min(self.video_loader.total_frames, self.video_loader_2.total_frames)
-        
-        for f in range(total_frames):
-            # --- 第一組 ---
-            df_L = self.pose_estimater.getPersonDf(frame_num=f)
-            df_R = self.pose_estimater_2.getPersonDf(frame_num=f)
-            if not df_L.empty and not df_R.empty:
-                frame_L = {"keypoints": df_L.iloc[0]["keypoints"]}
-                frame_R = {"keypoints": df_R.iloc[0]["keypoints"]}
-                self.pose_analyzer.addAnalyzeInfo(f, frame_L, frame_R)
-                
-            # --- 第二組 ---
-            f_group2 = self._get_aligned_frame_num_for_group2(f)
-            df_L_2 = self.pose_estimater_3.getPersonDf(frame_num=f_group2)
-            df_R_2 = self.pose_estimater_4.getPersonDf(frame_num=f_group2)
-            if not df_L_2.empty and not df_R_2.empty:
-                frame_L_2 = {"keypoints": df_L_2.iloc[0]["keypoints"]}
-                frame_R_2 = {"keypoints": df_R_2.iloc[0]["keypoints"]}
-                self.pose_analyzer_3.addAnalyzeInfo(f_group2, frame_L_2, frame_R_2)
-
-        # self.ui.showBR_checkBox.setChecked(True)
-        self._update_phase_visualization()
+        self._load_saved_comparison(True)
 
     def load2DProcessedData(self):
-        self.setFrameOffset(-2)
-        rapsodo_json_path = os.path.join(self.video_loader.folder_path, f"{os.path.splitext(self.video_loader.video_name_2)[0]}_BRandRapsodo.json")
-        rapsodo_json_path_2 = os.path.join(self.video_loader_2.folder_path, f"{os.path.splitext(self.video_loader_2.video_name_2)[0]}_BRandRapsodo.json")
-        self.display_keyframe_data_from_json(rapsodo_json_path, rapsodo_json_path_2, is_processed=False)
-        self.display_roi_from_json(rapsodo_json_path, self.ui.label_3, self.ui.label_8, self.ui.label_4, self.spin_direction_widget)
-        self.display_roi_from_json(rapsodo_json_path_2, self.ui.label_6, self.ui.label_7, self.ui.label_9, self.spin_direction_widget2)
+        self._load_saved_comparison(False)
 
-        json_loader = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name)
-        # json_loader_2 = JsonLoader(self.video_loader.folder_path, self.video_loader.video_name_2)
-        json_loader_3 = JsonLoader(self.video_loader_2.folder_path, self.video_loader_2.video_name)
-        # json_loader_4 = JsonLoader(self.video_loader_2.folder_path, self.video_loader_2.video_name_2)
+    def _load_saved_comparison(self, is_processed):
+        loaders = (self.video_loader, self.video_loader_2)
+        rapsodo_paths = [os.path.join(loader.folder_path, f"{loader.video_name_2}_BRandRapsodo.json")
+                         for loader in loaders]
+        event_paths = ([os.path.join(loader.folder_path, f"{loader.video_name}_keyframes.json")
+                        for loader in loaders] if is_processed else rapsodo_paths)
+        self.display_keyframe_data_from_json(*event_paths, is_processed=is_processed)
+        for path, widgets in zip(rapsodo_paths, (
+                (self.ui.label_3, self.ui.label_8, self.ui.label_4, self.spin_direction_widget),
+                (self.ui.label_6, self.ui.label_7, self.ui.label_9, self.spin_direction_widget2))):
+            self.display_roi_from_json(path, *widgets)
 
-        self.json_path, person_df = json_loader.load()
-        # self.json_path2, person_df_2 = json_loader_2.load()
-        self.json_path3, person_df_3 = json_loader_3.load()
-        # self.json_path4, person_df_4 = json_loader_4.load()
-
-        self.pose_estimater.setProcessedData(person_df)
-        # self.pose_estimater_2.setProcessedData(person_df_2)
-        self.pose_estimater_3.setProcessedData(person_df_3)
-        # self.pose_estimater_4.setProcessedData(person_df_4)
-
-        # self.ui.showBR_checkBox.setChecked(True)
+        issues = []
+        for group, (loader, estimators, analyzer, metadata_path) in enumerate(zip(
+                loaders, ((self.pose_estimater, self.pose_estimater_2), (self.pose_estimater_3, self.pose_estimater_4)),
+                (self.pose_analyzer, self.pose_analyzer_3), rapsodo_paths)):
+            metadata = KeyframeJsonLoader(metadata_path).load() or {}
+            loader.frame_offset = int(metadata.get('Analysis', {}).get('frame_offset', -2))
+            for camera_index, (name, estimator) in enumerate(zip((loader.video_name, loader.video_name_2), estimators)):
+                result = JsonLoader(loader.folder_path, name).load()
+                if result is None:
+                    issues.append(f"{'上組 A' if group == 0 else '下組 B'} {('CF', 'CS')[camera_index]} 缺少骨架 JSON")
+                    continue
+                estimator.setProcessedData(result[1])
+            # Prepare each group's complete curve on its own timeline. Alignment
+            # is applied only when drawing, never while building analysis data.
+            for frame in range(int(loader.total_frames or 0)):
+                first, second = (estimator.getPersonDf(frame_num=frame) for estimator in estimators)
+                if first is None or second is None or first.empty or second.empty:
+                    continue
+                try:
+                    analyzer.addAnalyzeInfo(frame, {"keypoints": first.iloc[0]['keypoints']},
+                                           {"keypoints": second.iloc[0]['keypoints']})
+                except (ValueError, TypeError, IndexError, KeyError, np.linalg.LinAlgError) as exc:
+                    print(f"[Compare] group {group + 1}, frame {frame}: {exc}")
+            if analyzer.analyze_df.empty:
+                issues.append(f"{'上組 A' if group == 0 else '下組 B'} 沒有可用角度資料")
+        self.graph_status.setText("；".join(issues) if issues else
+                                 "肩髖分離角度比較｜上下拉桿分別定位；底部同步拖曳保留目前對齊差距。")
+        self._update_phase_visualization()
 
     def checkVideoLoad(self):
         """檢查影片是否讀取完成，並更新 UI 元素。"""
@@ -734,30 +837,31 @@ class PoseVideoCompareTabControl(QWidget):
             self.ui.videoNameLabel.setText("讀取影片中")
             QTimer.singleShot(100, self.checkVideoLoad)  # 每100ms 檢查一次
             return
+        if not self.video_loader.total_frames or not self.video_loader_2.total_frames:
+            self.ui.videoNameLabel.setText("載入失敗，請重新選擇兩組影片")
+            return
         # 影片讀取完成後更新 UI 元素
         self.updateVideoInfo()
 
     def updateVideoInfo(self):
-        """更新與影片相關的資訊顯示在 UI 上。"""
+        skeleton = self.ui.showSkeletonCheckBox.isChecked()
+        bbox = self.ui.showBboxCheckBox.isChecked()
         self.reset()
-        total_frames = self.video_loader.total_frames
-        total_frames_2 = self.video_loader_2.total_frames
-        self.initFrameSlider(total_frames, self.ui.frameSlider_2, self.ui.frameNumLabel_2)
-        self.initFrameSlider(total_frames_2, self.ui.frameSlider_3, self.ui.frameNumLabel_3)
-        self.initFrameSlider(total_frames, self.ui.frameSlider, self.ui.frameNumLabel)
-        self.initGraph()
-        self.updateFrame(0)
+        for loader, slider, label in ((self.video_loader, self.ui.frameSlider_2, self.ui.frameNumLabel_2),
+                                      (self.video_loader_2, self.ui.frameSlider_3, self.ui.frameNumLabel_3)):
+            self.initFrameSlider(loader.total_frames, slider, label)
         self.model.setImageSize(self.video_loader.video_size)
-        self.ui.videoNameLabel.setText(f"{self.video_loader_2.video_name}")
-        self.ui.videoNameLabel_3.setText(f"{self.video_loader.video_name}")
-        video_size = self.video_loader.video_size
-        self.ui.ResolutionLabel.setText(f"(0,0) - {video_size[0]} x {video_size[1]}")
-        if self.is_processed:
-            self.loadProcessedData()
-        else:
-            self.ui.startCodeBtn.setEnabled(True)
-            self.load2DProcessedData()
-        # 設置幀偏移（補償相機延遲）并同步到 3D 查看器
+        self.ui.videoNameLabel.setText(self.video_loader_2.video_name)
+        self.ui.videoNameLabel_3.setText(self.video_loader.video_name)
+        width, height = self.video_loader.video_size
+        self.ui.ResolutionLabel.setText(f"{width} × {height}")
+        self._load_saved_comparison(self.is_processed)
+        self._configure_master_slider(0)
+        self.initGraph()
+        for drawer in (self.image_drawer, self.image_drawer_2, self.image_drawer_3, self.image_drawer_4):
+            drawer.setShowSkeleton(skeleton)
+            drawer.setShowBbox(bbox)
+        self.updateFrame(0)
 
     def _update_compare_frame_offset(self):
         """以兩組 preparation_frame 對齊，更新第二組播放偏移。"""
@@ -878,166 +982,76 @@ class PoseVideoCompareTabControl(QWidget):
                 self.ui.BR_label_3.setText(f"{wrist_speed:.1f}\n{extension_distance*100*0.818:.1f}")
                 self.ui.BR_label_unit.setText("m/s\ncm")
 
-    def display_keyframe_data_from_json(self, json_file_path: str, json_file_path_2: str = None, is_processed: bool = False) -> bool:
-        """從 JSON 檔案讀取關鍵幀資訊並顯示到 UI label
-        
-        Args:
-            json_file_path: 關鍵幀 JSON 檔案的完整路徑
-            json_file_path_2: 關鍵幀 JSON 檔案的完整路徑（第二個視圖）
-            is_processed: 指示 JSON 檔案是否已處理
-        Example:
-            self.display_keyframe_data_from_json(
-                "Db/Record/20260327_Pitcher01/20260327_1432_P06/log_Pitcher01_P01_20260414_011117.json"
-            )
-        """
-        if not json_file_path or not os.path.exists(json_file_path):
-            print(f"❌ JSON 檔案不存在: {json_file_path}")
-            return False
-        self.ui.footContact_ptn.setDisabled(False)
-        # self.ui.footContact_ptn_2.setDisabled(False)
-        self.ui.maxER_ptn.setDisabled(False)
-        # self.ui.maxER_ptn_2.setDisabled(False)
-        self.ui.release_ptn.setDisabled(False)
-        # self.ui.release_ptn_2.setDisabled(False)
+    @staticmethod
+    def _metric_text(value):
         try:
-            # 使用 KeyframeJsonLoader 加載 JSON 檔案
-            loader = KeyframeJsonLoader(json_file_path)
-            loader_2 = KeyframeJsonLoader(json_file_path_2)
-            data = loader.load()
-            data_2 = loader_2.load()
-            
-            if data is None or data_2 is None:
-                print(f"❌ 無法讀取 JSON 檔案: {json_file_path}")
-                return False
-            
-            fps = data.get('fps', 60)  # 默認 fps 為 60
-            fps_2 = data_2.get('fps', 60)  # 默認 fps 為 60
-            self.graph_plotter.set_video_fps(fps, fps_2)
-            if not is_processed:
-                self.preparation_frame = data.get('Keyframes', {}).get('preparation_frame', None)
-                self.preparation_frame_2 = data_2.get('Keyframes', {}).get('preparation_frame', None)
-            else:
-                self.preparation_frame = data.get('knee_up', {}).get('frame_number', None)
-                self.preparation_frame_2 = data_2.get('knee_up', {}).get('frame_number', None)
+            return f"{float(value):.1f}" if np.isfinite(float(value)) else "—"
+        except (TypeError, ValueError):
+            return "—"
 
-            # 提取並顯示足踝接觸 (Foot Contact)
+    def display_keyframe_data_from_json(self, json_file_path, json_file_path_2=None, is_processed=False):
+        loaded = False
+        fps_values = []
+        for group, (path, loader) in enumerate(zip((json_file_path, json_file_path_2),
+                                                  (self.video_loader, self.video_loader_2))):
+            data = KeyframeJsonLoader(path).load() or {}
+            loaded = loaded or bool(data)
+            fps_values.append(float(data.get('fps') or loader.video_fps or 60))
+            suffix = "_2" if group else ""
             if is_processed:
-                fc_data = loader.get_keyframe('foot_contact')
-                fc_data_2 = loader_2.get_keyframe('foot_contact')
-                if fc_data and hasattr(self.ui, 'FC_label'):
-                    fc_frame = fc_data.get('frame_number', 'N/A')
-                    fc_frame_2 = fc_data_2.get('frame_number', 'N/A')
-                    fc_angle = fc_data.get('shoulder_hip_angle_deg', 'N/A')
-                    fc_angle_2 = fc_data_2.get('shoulder_hip_angle_deg', 'N/A')
-                    fc_stride = fc_data.get('stride_distance_cm', 'N/A')
-                    fc_stride_2 = fc_data_2.get('stride_distance_cm', 'N/A')
-
-                    if fc_frame != 'N/A' and fc_stride != 'N/A':
-                        self.ui.footContact_label.setText(f"第 {fc_frame} 幀")
-                        # self.ui.footContact_label_2.setText(f"第 {fc_frame_2} 幀")
-                        self.ui.FC_label.setText(f"{fc_angle:.1f}\n{float(fc_stride):.1f}")
-                        self.ui.FC_label_3.setText(f"{fc_angle_2:.1f}\n{float(fc_stride_2):.1f}")
-                        self.ui.FC_label_unit.setText("°\ncm")
-                        self.ui.FC_label_unit_3.setText("°\ncm")
-                        print(f"  ✓ 足踝接觸 (FC): 幀 {fc_frame} | 肩髖角 {fc_angle}° | 步距 {float(fc_stride):.1f}cm")
-                        self.foot_contact_frame = fc_frame  # 更新內部狀態
-                        self.foot_contact_frame_2 = fc_frame_2  # 更新內部狀態
+                preparation = (data.get('knee_up') or {}).get('frame_number')
+                events = [data.get(key) or {} for key in ('foot_contact', 'max_shoulder_er', 'release')]
+                frame_key = 'frame_number'
+                values = ((events[0].get('shoulder_hip_angle_deg'), events[0].get('stride_distance_cm')),
+                          (events[1].get('shoulder_angle_deg'),),
+                          (events[2].get('wrist_speed_mps'), events[2].get('extension_distance_cm')))
             else:
-                fc_frame = data.get('Keyframes', {}).get('FC', {}).get('frame', 'N/A')
-                fc_stride = data.get('Keyframes', {}).get('FC', {}).get('stride_distance', 'N/A')
-                fc_frame_2 = data_2.get('Keyframes', {}).get('FC', {}).get('frame', 'N/A')
-                fc_stride_2 = data_2.get('Keyframes', {}).get('FC', {}).get('stride_distance', 'N/A')
+                keyframes = data.get('Keyframes') or {}
+                preparation = keyframes.get('preparation_frame')
+                events = [keyframes.get(key) or {} for key in ('FC', 'MER', 'BR')]
+                frame_key = 'frame'
+                values = ((None, events[0].get('stride_distance')), (events[1].get('shoulder_angle'),),
+                          (events[2].get('wrist_speed'), events[2].get('extension_distance')))
+            setattr(self, 'preparation_frame' + suffix, preparation if isinstance(preparation, int) else None)
+            labels = ((self.ui.FC_label, self.ui.MER_label_3, self.ui.BR_label_3),
+                      (self.ui.FC_label_3, self.ui.MER_label_4, self.ui.BR_label_7))[group]
+            for attr, event, label, metrics in zip(('foot_contact_frame', 'max_shoulder_angle_frame', 'wrist_speed_frame'),
+                                                  events, labels, values):
+                frame = event.get(frame_key)
+                valid = isinstance(frame, int) and 0 <= frame < int(loader.total_frames or 0)
+                setattr(self, attr + suffix, frame if valid else None)
+                label.setText('\n'.join(self._metric_text(value) for value in metrics))
+                label.setToolTip("")
+        self.ui.FC_label_unit.setText("°\ncm")
+        self.ui.FC_label_unit_3.setText("°\ncm")
+        self.ui.MER_label_unit.setText("°")
+        self.ui.MER_label_unit_2.setText("°")
+        self.ui.BR_label_unit.setText("m/s\ncm")
+        self.ui.BR_label_unit_3.setText("m/s\ncm")
+        self.graph_plotter.set_video_fps(*fps_values)
+        self._sync_keyframe_controls()
+        self._update_compare_frame_offset()
+        return loaded
 
-                if fc_frame != 'N/A' and fc_stride != 'N/A':
-                    self.ui.footContact_label.setText(f"第 {fc_frame} 幀")
-                    # self.ui.footContact_label_2.setText(f"第 {fc_frame_2} 幀")
-                    self.ui.FC_label.setText(f"\n{float(fc_stride):.1f}")
-                    self.ui.FC_label_3.setText(f"\n{float(fc_stride_2):.1f}")
-                    self.ui.FC_label_unit.setText("°\ncm")
-                    self.ui.FC_label_unit_3.setText("°\ncm")
-                    print(f"  ✓ 足踝接觸 (FC): 幀 {fc_frame} | 步距 {float(fc_stride):.1f}cm")
-                    self.foot_contact_frame = fc_frame  # 更新內部狀態
-                    self.foot_contact_frame_2 = fc_frame_2  # 更新內部狀態
-            
-            # 提取並顯示最大肩外旋 (Max External Rotation)
-            if is_processed:
-                mer_data = loader.get_keyframe('max_shoulder_er')
-                mer_data_2 = loader_2.get_keyframe('max_shoulder_er')
-                if mer_data and hasattr(self.ui, 'MER_label_3'):
-                    mer_frame = mer_data.get('frame_number', 'N/A')
-                    mer_frame_2 = mer_data_2.get('frame_number', 'N/A')
-                    mer_angle = mer_data.get('shoulder_angle_deg', 'N/A')
-                    mer_angle_2 = mer_data_2.get('shoulder_angle_deg', 'N/A')
-            else:
-                mer_frame = data.get('Keyframes', {}).get('MER', {}).get('frame', 'N/A')
-                mer_angle = data.get('Keyframes', {}).get('MER', {}).get('shoulder_angle', 'N/A')
-                mer_frame_2 = data_2.get('Keyframes', {}).get('MER', {}).get('frame', 'N/A')
-                mer_angle_2 = data_2.get('Keyframes', {}).get('MER', {}).get('shoulder_angle', 'N/A')
-
-            if mer_frame != 'N/A' and mer_angle != 'N/A':
-                self.ui.maxER_label.setText(f"第 {mer_frame} 幀")
-                # self.ui.maxER_label_2.setText(f"第 {mer_frame_2} 幀")
-                self.ui.MER_label_3.setText(f"{mer_angle:.1f}")
-                self.ui.MER_label_4.setText(f"{mer_angle_2:.1f}")
-                self.ui.MER_label_unit.setText("°")
-                self.ui.MER_label_unit_2.setText("°")
-                print(f"  ✓ 最大肩外旋 (MER): 幀 {mer_frame} | 肩角 {mer_angle}°")
-                self.max_shoulder_angle_frame = mer_frame  # 更新內部狀態
-                self.max_shoulder_angle_frame_2 = mer_frame_2  # 更新內部狀態
-            
-            # 提取並顯示釋放點 (Release/Ball Release)
-            if is_processed:
-                br_data = loader.get_keyframe('release')
-                br_data_2 = loader_2.get_keyframe('release')
-                if br_data and hasattr(self.ui, 'BR_label_3'):
-                    br_frame = br_data.get('frame_number', 'N/A')
-                    br_frame_2 = br_data_2.get('frame_number', 'N/A')
-                    br_speed = br_data.get('wrist_speed_mps', 'N/A')
-                    br_extension = br_data.get('extension_distance_cm', 'N/A')
-                    br_speed_2 = br_data_2.get('wrist_speed_mps', 'N/A')
-                    br_extension_2 = br_data_2.get('extension_distance_cm', 'N/A')
-            else:
-                br_frame = data.get('Keyframes', {}).get('BR', {}).get('frame', 'N/A')
-                br_frame_2 = data_2.get('Keyframes', {}).get('BR', {}).get('frame', 'N/A')
-                br_speed = data.get('Keyframes', {}).get('BR', {}).get('wrist_speed', 'N/A')
-                br_extension = data.get('Keyframes', {}).get('BR', {}).get('extension_distance', 'N/A')
-                br_speed_2 = data_2.get('Keyframes', {}).get('BR', {}).get('wrist_speed', 'N/A')
-                br_extension_2 = data_2.get('Keyframes', {}).get('BR', {}).get('extension_distance', 'N/A')
-
-            if br_frame != 'N/A' and br_speed != 'N/A' and br_extension != 'N/A':
-                self.ui.release_label.setText(f"第 {br_frame} 幀")
-                # self.ui.release_label_2.setText(f"第 {br_frame_2} 幀")
-                self.ui.BR_label_3.setText(f"{float(br_speed):.1f}\n{float(br_extension):.1f}")
-                self.ui.BR_label_7.setText(f"{float(br_speed_2):.1f}\n{float(br_extension_2):.1f}")
-                self.ui.BR_label_unit.setText("m/s\ncm")
-                self.ui.BR_label_unit_3.setText("m/s\ncm")
-                print(f"  ✓ 釋放點 (BR): 幀 {br_frame} | 腕速 {float(br_speed):.1f}m/s | 伸展距 {float(br_extension):.1f}cm")
-                self.wrist_speed_frame = br_frame  # 更新內部狀態
-                self.wrist_speed_frame_2 = br_frame_2  # 更新內部狀態
-
-            self._update_compare_frame_offset()
-
-            # 打印摘要
-            print(f"\n✓ 成功顯示關鍵幀資訊")
-            # loader.print_summary()
-            return True
-            
-        except Exception as e:
-            print(f"❌ 顯示關鍵幀資訊出錯: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-        
     def display_roi_from_json(self, json_path, label_widget: QLabel, label_widget_2: QLabel, text_label: QLabel = None, direction_widget: SpinDirectionWidget = None):
-        # 1. 讀取 JSON 檔案
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        label_widget.clear()
+        label_widget_2.clear()
+        if text_label is not None:
+            text_label.clear()
+        if direction_widget is not None:
+            direction_widget.setDirection(None)
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
         
         # 2. 取得 Base64 字串 (假設我們要看 roi_frame_1)
         base64_str = data.get("roi_frame_1")
         base64_str_2 = data.get("roi_frame_2")
         wrist_point = data.get("wrist_point", None)
-        self.br_points.append(wrist_point)
+        if isinstance(wrist_point, list) and len(wrist_point) >= 2:
+            self.br_points.append(wrist_point)
         if not base64_str or not base64_str_2:
             print("找不到影像數據")
             return
@@ -1060,9 +1074,9 @@ class PoseVideoCompareTabControl(QWidget):
         label_widget_2.setPixmap(pixmap_2)
         label_widget_2.setScaledContents(True) # 讓圖片自動適應 Label 大小
 
-        metrics = data.get("metrics", {})
+        metrics = data.get("metrics") or {}
         if text_label:
-            text_label.setText(f"球速:{metrics.get('velocity_mph', 'N/A'):.1f} kph\n轉速:{metrics.get('total_spin_rpm', 'N/A')} rpm")
+            text_label.setText(f"球速:{self._metric_text(metrics.get('velocity_mph'))} kph\n轉速:{metrics.get('total_spin_rpm', 'N/A')} rpm")
             if direction_widget:
                 direction_widget.setDirection(metrics.get('spin_direction', 'N/A'))
 
@@ -1235,49 +1249,16 @@ class PoseVideoCompareTabControl(QWidget):
         return False
     
     def _update_phase_visualization(self):
-        """更新階段視覺化（輔助線和顏色區段）"""
-        if None in [self.preparation_frame, self.foot_contact_frame, 
-                   self.max_shoulder_angle_frame, self.wrist_speed_frame]:
-            print("⚠️ 無法更新階段視覺化，缺少關鍵幀資訊")
-            return
-        if self._phase_visualization_done:
-            # print("⚠️ 階段視覺化已完成，無需重複更新")
-            return
-        
-        # 繪製輔助線
-        # self.graph_plotter.draw_vertical_lines(
-        #     x1=self.foot_contact_frame,
-        #     x2=self.max_shoulder_angle_frame,
-        #     x3=self.wrist_speed_frame,
-        #     width=1
-        # )
-        
-        # 設置顏色區段
-        segments = [
-            (self.preparation_frame, self.foot_contact_frame, QColor("#1C7CDB")),
-            (self.foot_contact_frame, self.max_shoulder_angle_frame, QColor("#C90E0E")),
-            (self.max_shoulder_angle_frame, self.wrist_speed_frame, QColor("#F2A900")),
-            (self.wrist_speed_frame, self.wrist_speed_frame + 7, QColor("#00AC2D"))
-        ]
-        segments_2 = [
-            (self.preparation_frame_2, self.foot_contact_frame_2, QColor("#1C7CDB")),
-            (self.foot_contact_frame_2, self.max_shoulder_angle_frame_2, QColor("#C90E0E")),
-            (self.max_shoulder_angle_frame_2, self.wrist_speed_frame_2, QColor("#F2A900")),
-            (self.wrist_speed_frame_2, self.wrist_speed_frame_2 + 7, QColor("#00AC2D"))
-        ]
-
-        
-        # 更新 Slider 顏色覆蓋層
-        # if self.overlay is None:
-        #     self.overlay = SliderColorOverlay(self.ui.frameSlider, segments, segment_half_thickness=9)
-        # else:
-        #     self.overlay.updateSegments(segments)
-        
-        # 更新圖表的動作階段和偏移量
-        print("✓ 更新階段視覺化(graph)")
+        phases = []
+        for suffix in ("", "_2"):
+            frames = [getattr(self, attr + suffix) for attr in (
+                'preparation_frame', 'foot_contact_frame', 'max_shoulder_angle_frame', 'wrist_speed_frame')]
+            frames.append(frames[-1] + 7 if frames[-1] is not None else None)
+            phases.append([(start, end, QColor(color)) for start, end, color in zip(
+                frames, frames[1:], ("#1C7CDB", "#C90E0E", "#F2A900", "#00AC2D"))
+                if start is not None and end is not None and end > start])
+        self.graph_plotter.set_motion_phases(*phases)
         self.graph_plotter.set_compare_frame_offset(self.compare_frame_offset)
-        self.graph_plotter.set_motion_phases(segments, segments_2)
-        self._phase_visualization_done = True
 
     def showGraph(self, container_widget: QWidget):
         layout = container_widget.layout()
@@ -1318,68 +1299,22 @@ class PoseVideoCompareTabControl(QWidget):
         if getattr(self, '_play_timer', None) is not None and self._play_timer.isActive():
             self._play_timer.start(self._get_play_interval_ms())
 
-    def playFrame(self, start_num:int=0):
-        """Start playing frames using a timer instead of blocking calls.
-        This starts playback using each group's current slider position so
-        group1/group2 continue from their own frame indices instead of
-        jumping to the same master frame.
-        """
+    def playFrame(self, start_num=0):
         if self._play_timer is None:
             self._play_timer = QTimer(self)
             self._play_timer.timeout.connect(self._playNextFrame)
-
-        # initialize per-group play pointers from their sliders
-        try:
-            self._current_play_frame_group1 = int(self.ui.frameSlider_2.value())
-        except Exception:
-            self._current_play_frame_group1 = 0
-        try:
-            self._current_play_frame_group2 = int(self.ui.frameSlider_3.value())
-        except Exception:
-            self._current_play_frame_group2 = 0
-
+        if self.ui.frameSlider.value() >= self.ui.frameSlider.maximum():
+            self.ui.frameSlider.setValue(self.ui.frameSlider.minimum())
         self._play_timer.start(self._get_play_interval_ms())
 
     def _playNextFrame(self):
-        """Advance each group's play pointer from its current position."""
-        total1 = int(self.video_loader.total_frames or 0)
-        total2 = int(getattr(self.video_loader_2, 'total_frames', 0) or 0)
-
-        any_running = False
-
-        # advance group1 if possible
-        if self._current_play_frame_group1 < max(0, total1 - 1):
-            self._current_play_frame_group1 += 1
-            any_running = True
-            self.ui.frameSlider_2.blockSignals(True)
-            self.ui.frameSlider_2.setValue(self._current_play_frame_group1)
-            self.ui.frameSlider_2.blockSignals(False)
-            self._update_group1_display(self._current_play_frame_group1)
-
-        # advance group2 if possible
-        if self._current_play_frame_group2 < max(0, total2 - 1):
-            self._current_play_frame_group2 += 1
-            any_running = True
-            self.ui.frameSlider_3.blockSignals(True)
-            self.ui.frameSlider_3.setValue(self._current_play_frame_group2)
-            self.ui.frameSlider_3.blockSignals(False)
-            self._update_group2_display(self._current_play_frame_group2)
-
-        # update master slider visually (without emitting) to reflect progress
-        try:
-            master_val = min(self._current_play_frame_group1, self._current_play_frame_group2)
-        except Exception:
-            master_val = 0
-        self.ui.frameSlider.blockSignals(True)
-        self.ui.frameSlider.setValue(self._current_play_frame_group1)
-        self.ui.frameSlider.blockSignals(False)
-
-        self.graph_plotter.updateGraph(self._current_play_frame_group1, self.video_loader.video_name, self.video_loader_2.video_name)
-
-        if not any_running:
-            # both groups finished
-            if self._play_timer is not None and self._play_timer.isActive():
-                self._play_timer.stop()
+        if not self.is_play:
+            return
+        slider = self.ui.frameSlider
+        if slider.value() < slider.maximum():
+            slider.setValue(slider.value() + 1)
+        else:
+            self._play_timer.stop()
             self.is_play = False
             self.ui.playBtn.setText("▶︎")
 
@@ -1412,111 +1347,13 @@ class PoseVideoCompareTabControl(QWidget):
         self._update_phase_visualization()
 
     def analyzeFrame(self):
-        fps = 0
-        total_frames = self.video_loader.total_frames
-        frame_num = self.ui.frameSlider.value()
-        self.ui.frameNumLabel.setText(f'{frame_num}/{total_frames - 1}')
-        frame_num_group2 = self._get_aligned_frame_num_for_group2(frame_num)
-        # frame_num_group2 = frame_num
+        # Comparison only replays saved results; scrubbing never runs inference.
+        self.updateFrame(self.ui.frameSlider.value())
 
-        video_fps = float(getattr(self.video_loader, 'video_fps', 0) or 0)
-        if video_fps <= 0:
-            video_fps = 30.0
-
-        # if self.preparation_frame is not None and self.wrist_speed_frame is not None:
-        #     start_frame = self.preparation_frame
-        #     end_frame = self.wrist_speed_frame + 7
-        #     total_seconds = max(0.0, (end_frame - start_frame) / video_fps)
-        #     self.ui.frameNumLabel.setText(f'{frame_num}/{total_frames - 1} ({total_seconds :.2f}s)')
-        # else:
-        #     total_seconds = total_frames / video_fps
-        #     self.ui.frameNumLabel.setText(f'{frame_num}/{total_frames - 1}')
-
-        frame, frame_2 = self.video_loader.getVideoImage(frame_num)
-        frame_3, frame_4 = self.video_loader_2.getVideoImage(frame_num_group2)
-        t0 = time.time()
-        if not self.is_processed:
-            _, _, fps= self.pose_estimater.detectKpt(frame, frame_num, is_video=True, is_processed=self.is_processed)
-            _, _, fps= self.pose_estimater_2.detectKpt(frame_2, frame_num, is_video=True, is_processed=self.is_processed)
-            _, _, fps= self.pose_estimater_3.detectKpt(frame_3, frame_num_group2, is_video=True, is_processed=self.is_processed)
-            _, _, fps= self.pose_estimater_4.detectKpt(frame_4, frame_num_group2, is_video=True, is_processed=self.is_processed)
-        t2 = time.time()
-        # self.ui.FPSInfoLabel.setText(f"{fps:02d}")
-        t3 = time.time()
-        if self.viewer3d and self.viewer3d_2:
-        # 取得2D骨架資料，考慮幀偏移以補償相機延遲
-            person_df_L = self.pose_estimater.getPersonDf(frame_num=frame_num)
-            person_df_R = self.pose_estimater_2.getPersonDf(frame_num=frame_num)
-            person_df_L_2 = self.pose_estimater_3.getPersonDf(frame_num=frame_num_group2)
-            person_df_R_2 = self.pose_estimater_4.getPersonDf(frame_num=frame_num_group2)
-            if not person_df_L.empty and not person_df_R.empty:
-                # 取第一個人的 keypoints
-                frame_L = {"keypoints": person_df_L.iloc[0]["keypoints"]}
-                frame_R = {"keypoints": person_df_R.iloc[0]["keypoints"]}
-                self.pose_analyzer.addAnalyzeInfo(frame_num, frame_L, frame_R)
-                self.viewer3d.add_2d_keypoints(frame_L, frame_R, frame_num=frame_num)
-            if not person_df_L_2.empty and not person_df_R_2.empty:
-                frame_L_2 = {"keypoints": person_df_L_2.iloc[0]["keypoints"]}
-                frame_R_2 = {"keypoints": person_df_R_2.iloc[0]["keypoints"]}
-                self.pose_analyzer_3.addAnalyzeInfo(frame_num_group2, frame_L_2, frame_R_2)
-                self.viewer3d_2.add_2d_keypoints(frame_L_2, frame_R_2, frame_num=frame_num_group2)
-
-                # 執行階段檢測（包括已處理影片，因為關鍵帧信息未保存）
-                self.phaseDetection(frame_num)
-        t4 = time.time()
-
-        if frame_num == total_frames - 1:
-            # 記錄右手腕位置 (is_kpt=True 時返回 numpy array)
-            # person_data_2 = self.pose_estimater_2.getPersonDf(frame_num=self.wrist_speed_frame, is_select=True, is_kpt=True)
-            # person_data_4 = self.pose_estimater_4.getPersonDf(frame_num=self.wrist_speed_frame_2, is_select=True, is_kpt=True)
-            # self.br_points.append(person_data_2[10]) if person_data_2 is not None else None
-            # self.br_points.append(person_data_4[10]) if person_data_4 is not None else None
-            if not self.is_processed and self.ui.showSkeletonCheckBox.isChecked():
-                self.video_loader.saveVideo(self.video_loader.folder_path)
-        
-        # 使用已獲取的 frame 來更新顯示
-        self._updateFrame(frame, frame_2, frame_3, frame_4, frame_num)
-        self.phaseDetection(frame_num)
-
-    def _updateFrame(self, frame, frame_2, frame_3, frame_4, frame_num: int):
-        """內部更新幀顯示，直接使用已獲取的圖像數據"""
-        drawed_img = self.image_drawer.drawInfo(frame, frame_num, self.pose_estimater.kpt_buffer)
-        drawed_img_2 = self.image_drawer_2.drawInfo(frame_2, frame_num, self.pose_estimater_2.kpt_buffer)
-        drawed_img_3 = self.image_drawer_3.drawInfo(frame_3, frame_num, self.pose_estimater_3.kpt_buffer)
-        drawed_img_4 = self.image_drawer_4.drawInfo(frame_4, frame_num, self.pose_estimater_4.kpt_buffer)
-
-        # 如果啟用顯示釋放點，則在 frame_2 上繪製
-        if self.show_br_points and self.br_points:
-            drawed_img_2 = self._draw_br_points(drawed_img_2)
-            drawed_img_4 = self._draw_br_points(drawed_img_4)
-        
-        self.showImage(drawed_img, self.view_scene, self.ui.FrameView)
-        self.showImage(drawed_img_2, self.curve_scene, self.ui.FrameView_2)
-        self.showImage(drawed_img_3, self.curve_scene_3, self.ui.FrameView_3)
-        self.showImage(drawed_img_4, self.curve_scene_4, self.ui.FrameView_4)
-
-        # 更新圖表曲線
-        if hasattr(self, 'graph_plotter') and self.graph_plotter is not None:
-            self.graph_plotter.updateGraph(frame_num, self.video_loader.video_name, self.video_loader_2.video_name)
-
-    def updateFrame(self, frame_num: int):
-        """更新幀顯示（重新讀取圖像）"""
-        image, image_2 = self.video_loader.getVideoImage(frame_num)
-        frame_num_group2 = self._get_aligned_frame_num_for_group2(frame_num)
-        # frame_num_group2 = frame_num
-        image_3, image_4 = self.video_loader_2.getVideoImage(frame_num_group2)
-        self._updateFrame(image, image_2, image_3, image_4, frame_num)
-        if self.ui.frameSlider_2.value() != frame_num:
-            self.ui.frameSlider_2.blockSignals(True)
-            self.ui.frameSlider_2.setValue(frame_num)
-            self.ui.frameSlider_2.blockSignals(False)
-        if self.ui.frameSlider_3.value() != frame_num_group2:
-            self.ui.frameSlider_3.blockSignals(True)
-            self.ui.frameSlider_3.setValue(frame_num_group2)
-            self.ui.frameSlider_3.blockSignals(False)
-        self.ui.frameNumLabel.setText(f'{frame_num}/{self.video_loader.total_frames - 1}')
-        self.ui.frameNumLabel_2.setText(f'{frame_num}/{self.video_loader.total_frames - 1}')
-        self.ui.frameNumLabel_3.setText(f'{frame_num_group2}/{self.video_loader_2.total_frames - 1}')
+    def updateFrame(self, frame_num):
+        self._render_group(0, frame_num)
+        self._render_group(1, frame_num + self.compare_frame_offset)
+        self._update_graph()
 
     def checkBox(self, visible:bool):
         elements = [
@@ -1529,13 +1366,6 @@ class PoseVideoCompareTabControl(QWidget):
         
         for element in elements:
             element.setVisible(visible)
-
-    def toggleDetect(self):
-        self.ui.showSkeletonCheckBox.setChecked(True)
-        frame, frame_2 = self.video_loader.getVideoImage(0)
-        _, _, _= self.pose_estimater.detectKpt(frame, 0, is_video=True)
-        _, _, _= self.pose_estimater_2.detectKpt(frame_2, 0, is_video=True)
-        self.ui.playBtn.click()
 
     def toggleSelect(self, state:int):
         if not self.ui.showSkeletonCheckBox.isChecked():
@@ -1568,33 +1398,15 @@ class PoseVideoCompareTabControl(QWidget):
             self.image_drawer.setShowTraj(False)
         self.updateFrame(self.ui.frameSlider.value())
 
-    def toggleShowSkeleton(self, state:int):
-        is_checked = state == 2
-        self.pose_estimater.setDetect(is_checked)
-        self.image_drawer.setShowSkeleton(is_checked)
-        self.pose_estimater_2.setDetect(is_checked)
-        self.image_drawer_2.setShowSkeleton(is_checked)
-        self.updateFrame(self.ui.frameSlider.value())
+    def toggleShowSkeleton(self, state):
+        for drawer in (self.image_drawer, self.image_drawer_2, self.image_drawer_3, self.image_drawer_4):
+            drawer.setShowSkeleton(state == Qt.Checked)
+        self._refresh_current_frames()
 
-    def toggleShowBbox(self, state:int):
-        if state == 2:  
-            self.image_drawer.setShowBbox(True)
-            self.image_drawer_2.setShowBbox(True)
-            self.updateFrame(self.ui.frameSlider.value())
-        if state == 0:
-            self.image_drawer.setShowBbox(False)
-            self.image_drawer_2.setShowBbox(False)
-            self.updateFrame(self.ui.frameSlider.value())
-
-    # def toggleShowAngleInfo(self, state:int):
-    #     if not self.ui.selectCheckBox.isChecked():
-    #         self.ui.showAngleCheckBox.setCheckState(0)
-    #         QMessageBox.warning(self, "無法顯示關節點角度資訊", "請選擇人!")
-    #         return
-    #     if state == 2:  
-    #         self.image_drawer.setShowAngleInfo(True)
-    #     else:
-    #         self.image_drawer.setShowAngleInfo(False)
+    def toggleShowBbox(self, state):
+        for drawer in (self.image_drawer, self.image_drawer_2, self.image_drawer_3, self.image_drawer_4):
+            drawer.setShowBbox(state == Qt.Checked)
+        self._refresh_current_frames()
 
     def toggleShowGraph(self, name, state:int):
         enabled = state == 2
@@ -1703,7 +1515,7 @@ class PoseVideoCompareTabControl(QWidget):
             print("✓ 已清除所有釋放點記錄")
             # 如果當前正在顯示，則刷新畫面
             if self.show_br_points:
-                self.updateFrame(self.ui.frameSlider_2.value())
+                self._refresh_current_frames()
             QMessageBox.information(self, "成功", "所有釋放點記錄已清除")
 
     def toggleShowBRPoints(self, state: int):
@@ -1717,7 +1529,7 @@ class PoseVideoCompareTabControl(QWidget):
             print(f"✓ 顯示釋放點 (共 {len(self.br_points)} 個)")
         else:
             print("✓ 隱藏釋放點")
-        self.updateFrame(self.ui.frameSlider_2.value())
+        self._refresh_current_frames()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -16,7 +16,7 @@ os.environ.setdefault("CONDA_PREFIX", conda_prefix)
 qt_plugin_path = os.path.join(conda_prefix, "Library", "plugins", "platforms")
 if os.path.isdir(qt_plugin_path):
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_plugin_path
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QAction
+from PyQt5.QtWidgets import QApplication, QMainWindow
 
 # vispy 必須在 PySpin 等第三方 DLL 被載入前鎖定 Qt 後端，
 # 否則 PySpin 附帶的 DLL 會與 Qt 的 QtOpenGL 衝突，導致載入失敗。
@@ -30,7 +30,6 @@ from Src.UI_Control.widgets.video_widget_2 import PoseVideoTabControl
 from Src.UI_Control.widgets.pitch_widget import PosePitchTabControl
 from Src.UI_Control.widgets.video_widget_compare import PoseVideoCompareTabControl
 from Src.UI_Control.forms.main_window import Ui_MainWindow
-from Src.UI_Control.widgets.camera_settings import CameraSettingsDialog
 
 class Main(QMainWindow):
     def __init__(self):
@@ -39,28 +38,21 @@ class Main(QMainWindow):
         self.ui.setupUi(self)
         self.model = Model()
         self.init_tabs()
-        self.settings_dialog = None
-        action = QAction("攝影機設定（曝光／焦距／顏色）", self)
-        action.triggered.connect(self.open_camera_settings)
-        self.menuBar().addMenu("攝影機").addAction(action)
-        self.addToolBar("攝影機").addAction(action)
+        self.camera_tab.configure_settings(self.pitch_tab, self.camera_sources)
 
     def camera_sources(self):
         return [("2D 相機", self.camera_tab.camera), ("2D", self.pitch_tab.camera)]
 
-    def open_camera_settings(self):
-        if self.settings_dialog is not None:
-            self.settings_dialog.close()
-            self.settings_dialog.deleteLater()
-        self.settings_dialog = CameraSettingsDialog(self.camera_sources, self)
-        self.settings_dialog.settings_changed.connect(self.pitch_tab.updateCameraSliders)
-        # Modeless so the user can see the live preview while adjusting.
-        self.settings_dialog.show()
-        self.settings_dialog.raise_()
-
     def closeEvent(self, event):
-        if self.settings_dialog is not None:
-            self.settings_dialog.close()
+        self.camera_tab.settings_panel.timer.stop()
+        self.camera_tab.preview_timer.stop()
+        self.camera_tab.timer.stop()
+        self.pitch_tab.timer.stop()
+        self.video_tab._set_analysis_running(False)
+        for tab in (self.pitch_tab, self.video_tab, self.video_compare_tab):
+            tab.is_play = False
+            if getattr(tab, '_play_timer', None) is not None:
+                tab._play_timer.stop()
         for _, camera in self.camera_sources():
             if camera is not None:
                 camera.close_camera()

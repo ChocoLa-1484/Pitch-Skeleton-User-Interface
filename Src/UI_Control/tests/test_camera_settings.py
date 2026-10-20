@@ -144,14 +144,14 @@ class CameraSettingsTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.camera.settings.apply("gain", 4)
 
 
-class CameraSettingsDialogTests(unittest.TestCase):
+class CameraSettingsPanelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
         from PyQt5.QtWidgets import QApplication
-        from Src.UI_Control.widgets.camera_settings import CameraSettingsDialog
+        from Src.UI_Control.widgets.camera_settings import CameraSettingsPanel
         cls.app = QApplication.instance() or QApplication([])
-        cls.dialog_type = CameraSettingsDialog
+        cls.dialog_type = CameraSettingsPanel
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

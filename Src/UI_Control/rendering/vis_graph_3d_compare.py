@@ -1,4 +1,5 @@
 import pyqtgraph as pg
+import math
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QSizePolicy, QGraphicsRectItem, QGraphicsTextItem
 from PyQt5 import QtCore
@@ -19,7 +20,8 @@ class GraphPlotter():
         self.plots = []
         self.pose_analyzer = pose_analyzer
         self.pose_analyzer_2 = pose_analyzer_2
-        self.enabled_curves = {name: True for name in self.speed_names}  # 是否畫曲線
+        self.enabled_curves = {name: name == "shoulder_hiple_angle" for name in self.speed_names}
+        self._displayed_plots = []
         self._motion_phases = []
         self._motion_phases_2 = []
         self.fps = 60
@@ -31,19 +33,24 @@ class GraphPlotter():
         """Set up the plot widget with labels, axis, and initial configuration."""
         self.plots = []
         self.graph.clear()
+        self._displayed_plots = []
+        self._static_drawn = False
+        self.scatters_1, self.scatters_2 = {}, {}
 
         graph_settings = {
             "腳踝速度": {'yrange': (0, 10), 'ylabel': '速度 (m/s)'},
             '膝蓋角度': {'yrange': (0, 180), 'ylabel': '角度 (度)'},
             "肩膀外旋角度": {'yrange': (0, 180), 'ylabel': '角度 (度)'},
             "手腕速度": {'yrange': (0, 40), 'ylabel': '速度 (m/s)'},
-            "肩髖分離角度": {'yrange': (-70, 70), 'ylabel': '角度 (度)'}
+            "肩髖分離角度": {'yrange': (-180, 180), 'ylabel': '角度 (度)'}
         }
         for i, title in enumerate(self.title_names):
-            p = self.graph.addPlot(row=i, col=0, title=f"{title}")
+            p = pg.PlotItem(title=title)
+            for axis in ('left', 'bottom', 'top'):
+                p.getAxis(axis).setTickFont(QFont('Consolas', 10))
             p.showAxis('top')
             p.showGrid(x=False, y=False)
-            # p.setLabel('bottom', '幀')
+            p.setLabel('bottom', '對齊幀')
             p.setXRange(0, frame_range+1, padding=0.0) 
 
             settings = graph_settings.get(title)
@@ -51,7 +58,7 @@ class GraphPlotter():
                 p.setLabel('left', settings['ylabel'])
                 p.setYRange(settings['yrange'][0], settings['yrange'][1], padding=0.0)
             p.setMinimumHeight(120)
-            p.setMinimumWidth(620)
+            p.setMinimumWidth(0)
             p.getAxis('left').setWidth(60)
             self.plots.append(p)
 
@@ -59,10 +66,7 @@ class GraphPlotter():
         self.curve_colors = ["#000000", "#800080", "#004BAC", "#C60000", '#00aa00']
 
         # 預設可見的圖表
-        visible_titles = {"腳踝速度", "肩膀外旋角度", "手腕速度"}
-        for i, plot in enumerate(self.plots):
-            title = self.title_names[i]
-            plot.setVisible(title in visible_titles)
+        self._arrange_plots()
 
         # 如果之前呼叫過 draw_vertical_lines 但 plots 尚未建立，則在此恢復
         if hasattr(self, '_pending_verticals'):
@@ -80,28 +84,23 @@ class GraphPlotter():
             speed_name (str): 曲線的內部名稱 (e.g., "ankle_speed")
             visible (bool): True 為顯示，False 為隱藏
         """
-        # 找到對應的索引
-        try:
-            idx = self.speed_names.index(speed_name)
-            plot = self.plots[idx]
-            plot.setVisible(visible)
+        if speed_name in self.enabled_curves:
+            self.enabled_curves[speed_name] = visible
+            self._arrange_plots()
+            self._static_drawn = False
 
-            # Force the GraphicsLayoutWidget to recompute layout and redraw.
-            # When all rows are hidden then later one row is shown again, the
-            # layout sometimes doesn't re-flow until the window is resized.
-            # Trigger a geometry/update pass so the plot fills the available area.
-            try:
-                # update geometry immediately
-                self.graph.updateGeometry()
-                # schedule a zero-delay resize to force an internal relayout
-                from PyQt5.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self.graph.resize(self.graph.width(), self.graph.height()))
-            except Exception:
-                # best-effort only — do not raise on layout helpers
-                pass
-            
-        except ValueError:
-            print(f"找不到名稱為 {speed_name} 的圖表。")
+    def _arrange_plots(self):
+        # Hidden QGraphicsLayout rows still consume height. Only put visible
+        # plots into the layout so the middle chart cannot be pushed offscreen.
+        for plot in self._displayed_plots:
+            self.graph.removeItem(plot)
+        self._displayed_plots = []
+        for name, plot in zip(self.speed_names, self.plots):
+            visible = self.enabled_curves[name]
+            plot.setVisible(visible)
+            if visible:
+                self.graph.addItem(plot, row=len(self._displayed_plots), col=0)
+                self._displayed_plots.append(plot)
 
     def set_motion_phases(self, segments, segments_2):
         """
@@ -110,10 +109,13 @@ class GraphPlotter():
         """
         self._motion_phases = segments
         self._motion_phases_2 = segments_2
+        self._static_drawn = False
     
     def set_compare_frame_offset(self, offset: int):
         """設置第二組視頻的幀偏移量（用於對齐 footcontact_frame）"""
-        self.compare_frame_offset = int(offset)
+        if self.compare_frame_offset != int(offset):
+            self.compare_frame_offset = int(offset)
+            self._static_drawn = False
 
     def set_video_fps(self, fps, fps_2):
         self.fps = fps
@@ -139,16 +141,17 @@ class GraphPlotter():
             text.setFont(self.label_font)
             plot.addItem(text)
 
-    def updateGraph(self, frame_num: int, legend_name: str = None, legend_name_2: str = None, is_processed=True):
+    def updateGraph(self, frame_num: int, legend_name: str = None, legend_name_2: str = None, is_processed=True,
+                    frame_num_2=None):
         """Update the graph with the latest angle data for the specified frame."""
         max_len = min(len(self.speed_names), len(self.title_names), len(self.plots))
         need_full_redraw = (not getattr(self, '_static_drawn', False)) or (not is_processed) 
-        self.scatters_1 = {}
-        self.scatters_2 = {}       
         for idx in range(max_len):
             speed_name = self.speed_names[idx]
             plot = self.plots[idx]
             title = self.title_names[idx]
+            if not self.enabled_curves[speed_name]:
+                continue
             is_new_plot = (idx not in self.scatters_1)
             if need_full_redraw or is_new_plot:
                 plot.clear()
@@ -245,30 +248,26 @@ class GraphPlotter():
 
             # 當前幀的散點
             _, speed_value = self.pose_analyzer.get_frame_angleOrSpeed_data(frame_num=frame_num, speed_name=speed_name)
-            try:
-                speed_value = float(speed_value)
-            except (TypeError, ValueError):
-                speed_value = 0
-            self.scatters_1[idx].setData([frame_num], [speed_value])
+            speed_value = self._finite_value(speed_value)
+            self.scatters_1[idx].setData([frame_num] if speed_value is not None else [],
+                                       [speed_value] if speed_value is not None else [])
 
-            frame_num_group2 = frame_num + self.compare_frame_offset
+            frame_num_group2 = frame_num + self.compare_frame_offset if frame_num_2 is None else frame_num_2
             _, speed_value_2 = self.pose_analyzer_2.get_frame_angleOrSpeed_data(frame_num=frame_num_group2, speed_name=speed_name)
-            try:
-                speed_value_2 = float(speed_value_2)
-            except (TypeError, ValueError):
-                speed_value_2 = 0
-            self.scatters_2[idx].setData([frame_num], [speed_value_2])
+            speed_value_2 = self._finite_value(speed_value_2)
+            self.scatters_2[idx].setData([frame_num_group2 - self.compare_frame_offset] if speed_value_2 is not None else [],
+                                       [speed_value_2] if speed_value_2 is not None else [])
 
             # 🚩 終極解決方案：符號位分離 + 指定 Consolas 字型
             # 負號常因為渲染引擎問題與空白寬度不一，我們手動拆分符號與數值
-            v1_int = int(speed_value)
-            v2_int = int(speed_value_2)
+            v1_int = int(speed_value) if speed_value is not None else 0
+            v2_int = int(speed_value_2) if speed_value_2 is not None else 0
             
             # 格式化為：[1位符號] + [3位數字]，總共 4 格
             v1_sign = "-" if v1_int < 0 else " "
             v2_sign = "-" if v2_int < 0 else " "
-            v1_val = f"{abs(v1_int):2d}"
-            v2_val = f"{abs(v2_int):2d}"
+            v1_val = f"{abs(v1_int):2d}" if speed_value is not None else "—"
+            v2_val = f"{abs(v2_int):2d}" if speed_value_2 is not None else "—"
             
             # 使用 Consolas 這是 Windows 上寬度最穩定的字體
             # 我們將符號與數字分開在不同 span 但都放在 pre 屬性下
@@ -285,6 +284,14 @@ class GraphPlotter():
             self.draw_vertical_lines(*self._pending_verticals) if hasattr(self, '_pending_verticals') else None
             if is_processed:
                 self._static_drawn = True
+
+    @staticmethod
+    def _finite_value(value):
+        try:
+            value = float(value)
+            return value if math.isfinite(value) else None
+        except (TypeError, ValueError):
+            return None
     
     def resize_graph(self,width, height):
         self.graph.resize(width, height)
@@ -294,6 +301,10 @@ class GraphPlotter():
     
     def reset(self):
         self.graph.clear()
+        self.plots = []
+        self._displayed_plots = []
+        self.scatters_1, self.scatters_2 = {}, {}
+        self.compare_frame_offset = 0
         self._static_drawn = False
         # 清除暫存的 vertical lines 設定
         if hasattr(self, '_pending_verticals'):

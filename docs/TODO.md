@@ -12,6 +12,11 @@
 
 **更新時間**：2026-10-14
 
+**【PR #4 合併（2026-10-20）】**
+- 同學 ChocoLa-1484 的 PR #4（標題「fix main.py」，實際是 2D／3D／回放比較三頁重構）：新增 `Src/analysis/pitch_events.py`（2D、3D 共用的 FC／MER／BR 判定）、`pose_replay.py`（已存骨架的幀號換算）、比較頁選影片對話框、關鍵幀跳轉；3D 統一「載入影片」，CF 一律為第一支，舊版估算模式交換內參並轉置 F（數學正確）。
+- 衝突兩處：`video_widget_2.py` 採用 PR #4 新版面並保留「預設舊版估算」與 `chessboard_cross` 新路徑；PR #4 對 `PROJECT_LAYOUT.md` 的補充併入 `DEVELOPMENT.md` 最後一節。
+- 驗證：16 組測試逐檔全部通過（155 項，含 PR #4 新增的 4 組）；主程式無畫面模式可啟動。
+
 **【PR #3 合併與校正整理定案（2026-10-14，使用者同意）】**
 - 採用 PR #3 的分層架構；main 上 PR #3 之後的修改逐項移植：3D 分頁選 CS 或 CF 都自動載入兩支（`Src/cameras/video_control.py`）、內參鏡頭焦距檢查與長焦鎖畸變（`calib.py`／`calibrate.py`）、`calib_store.save_fundamental(extra=)`、RoMa 工具與視窗版、`start_roma.bat`、文件與 TODO。
 - 校正程式依使用者要求集中到 `Src/calibration/`：`calibrate.py`、`calib.py`（原 PR #3 放在 `UI_Control/`）、共用 `calib_store.py`／`calibration_workflow.py`、`chessboard_cross/`（同學的棋盤格／十字架／螢光球）、`roma/`。5 支舊設備工具刪除；學姊 01／02／03 留在 `Src/legacy/calibration/`。

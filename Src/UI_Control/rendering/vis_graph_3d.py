@@ -1,6 +1,6 @@
 import pyqtgraph as pg
 import numpy as np
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QSizePolicy
 from PyQt5 import QtCore
 from Src.analysis.analyze_3d import PoseAnalyzer
@@ -19,7 +19,7 @@ class GraphPlotter():
         self.graph.ci.layout.setSpacing(0)
         self.plots = []
         self.pose_analyzer = pose_analyzer
-        self.enabled_curves = {name: True for name in self.speed_names}  # 是否畫曲線
+        self.enabled_curves = {name: name == 'shoulder_hiple_angle' for name in self.speed_names}
         self._motion_phases = []
 
     def _init_graph(self, frame_range: int):
@@ -32,10 +32,10 @@ class GraphPlotter():
             '膝蓋角度': {'yrange': (0, 180), 'ylabel': '角度 (度)'},
             "肩膀外旋角度": {'yrange': (0, 180), 'ylabel': '角度 (度)'},
             "手腕速度": {'yrange': (0, 40), 'ylabel': '速度 (m/s)'},
-            "肩峰連線與髖關節連線角度": {'yrange': (-60, 60), 'ylabel': '角度 (度)'}
+            "肩峰連線與髖關節連線角度": {'yrange': (-180, 180), 'ylabel': '角度 (度)'}
         }
         for i, title in enumerate(self.title_names):
-            p = self.graph.addPlot(row=i, col=0, title=f"{title}")
+            p = pg.PlotItem(title=title)
             p.showGrid(x=False, y=False)
             # p.setLabel('bottom', '幀')
             p.setXRange(0, frame_range+1, padding=0.0) 
@@ -45,18 +45,17 @@ class GraphPlotter():
                 p.setLabel('left', settings['ylabel'])
                 p.setYRange(settings['yrange'][0], settings['yrange'][1], padding=0.0)
             p.setMinimumHeight(120)
-            p.setMinimumWidth(620)
+            p.setMinimumWidth(0)
             p.getAxis('left').setWidth(60)
+            for axis in ('left', 'bottom'):
+                p.getAxis(axis).setTickFont(QFont('Consolas', 10))
             self.plots.append(p)
 
         # 預設每條曲線顏色
         self.curve_colors = ["#000000", "#800080", "#004BAC", "#C60000", '#00aa00']
 
         # 預設可見的圖表
-        visible_titles = {"腳踝速度", "肩膀外旋角度", "手腕速度"}
-        for i, plot in enumerate(self.plots):
-            title = self.title_names[i]
-            plot.setVisible(title in visible_titles)
+        self._layout_visible_plots()
 
         # 如果之前呼叫過 draw_vertical_lines 但 plots 尚未建立，則在此恢復
         if hasattr(self, '_pending_verticals'):
@@ -74,28 +73,8 @@ class GraphPlotter():
             speed_name (str): 曲線的內部名稱 (e.g., "ankle_speed")
             visible (bool): True 為顯示，False 為隱藏
         """
-        # 找到對應的索引
-        try:
-            idx = self.speed_names.index(speed_name)
-            plot = self.plots[idx]
-            plot.setVisible(visible)
-
-            # Force the GraphicsLayoutWidget to recompute layout and redraw.
-            # When all rows are hidden then later one row is shown again, the
-            # layout sometimes doesn't re-flow until the window is resized.
-            # Trigger a geometry/update pass so the plot fills the available area.
-            try:
-                # update geometry immediately
-                self.graph.updateGeometry()
-                # schedule a zero-delay resize to force an internal relayout
-                from PyQt5.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self.graph.resize(self.graph.width(), self.graph.height()))
-            except Exception:
-                # best-effort only — do not raise on layout helpers
-                pass
-            
-        except ValueError:
-            print(f"找不到名稱為 {speed_name} 的圖表。")
+        self.enabled_curves[speed_name] = visible
+        self._layout_visible_plots()
 
     def set_motion_phases(self, segments):
         """
@@ -104,12 +83,27 @@ class GraphPlotter():
         """
         self._motion_phases = segments
 
+    def _layout_visible_plots(self):
+        # Hidden PlotItems still reserve rows in GraphicsLayout. Detach them.
+        for plot in self.plots:
+            if plot in self.graph.ci.items:
+                self.graph.removeItem(plot)
+        row = 0
+        for name, plot in zip(self.speed_names, self.plots):
+            visible = self.enabled_curves.get(name, False)
+            plot.setVisible(visible)
+            if visible:
+                self.graph.addItem(plot, row=row, col=0)
+                row += 1
+
     def updateGraph(self, frame_num: int):
         """Update the graph with the latest angle data for the specified frame."""
         max_len = min(len(self.speed_names), len(self.title_names), len(self.plots))
         for idx in range(max_len):
             speed_name = self.speed_names[idx]
             plot = self.plots[idx]
+            if not self.enabled_curves.get(speed_name, False):
+                continue
             title = self.title_names[idx]
             plot.clear()
 
@@ -146,7 +140,7 @@ class GraphPlotter():
 
             # 更新標題顯示當前幀速度
             label = f'{speed_value:.2f}' if np.isfinite(speed_value) else '--'
-            plot.setTitle(f"{title}: {label}", size='8pt')
+            plot.setTitle(f"{title}: {label}", size='11pt')
         self.draw_vertical_lines(*self._pending_verticals) if hasattr(self, '_pending_verticals') else None
     
     def resize_graph(self,width, height):
@@ -157,6 +151,7 @@ class GraphPlotter():
     
     def reset(self):
         self.graph.clear()
+        self.plots = []
         # 清除暫存的 vertical lines 設定
         if hasattr(self, '_pending_verticals'):
             del self._pending_verticals
