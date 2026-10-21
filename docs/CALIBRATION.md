@@ -2,16 +2,17 @@
 
 給開發者看的校正說明：主流程、分步工具，以及各種校正方法與量測工具。使用者只需要 README 的「相機校正」一節。
 
-> 2026-10-11 由以下文件整併而成，內容未改寫：`DEVELOPMENT.md`「相機校正流程」一節、README 的校正細節、`CHESSBOARD_STRIDE.md`、`CROSS_CALIBRATION.md`、`FLUORESCENT_BALL_EXTRACTION.md`、`MAIN_METRIC.md`（第 3～6 節原作者：ChocoLa-1484）。
+> 2026-10-11 由以下文件整併而成；2026-10-20 將舊十字架章節更新為木框與手動座標流程：`DEVELOPMENT.md`「相機校正流程」一節、README 的校正細節、`CHESSBOARD_STRIDE.md`、`CROSS_CALIBRATION.md`、`FLUORESCENT_BALL_EXTRACTION.md`、`MAIN_METRIC.md`（第 3～6 節原作者：ChocoLa-1484）。
 
 ## 目錄
 
 1. 整合校正工具 `calibrate.py`（校正桿 + F 矩陣）
 2. 分步工具與 `Db\Calibration` 檔案結構
 3. 棋盤格內參、PnP 與 8-point 真實距離量測
-4. 8 顆螢光粉球十字架：HSV 偵測與公制 PnP 外參
+4. 木框 PnP 外參與手動座標標註
 5. 獨立螢光粉球提取
 6. `main_metric.py` 公制量測入口
+7. 雙棒八球 8-point 拍照與外參 UI
 
 ## 1. 整合校正工具 `calibrate.py`（校正桿 + F 矩陣）
 
@@ -26,7 +27,7 @@ python .\Src\UI_Control\calibrate.py
 
 已校正內參且鏡頭、焦距及影像尺寸／裁切未變時，可勾選「沿用這兩台已有內參」。外參照片也可匯入包含 `cf`、`cs` 的資料夾，兩邊檔名必須相同。完整通過後才更新目前校正檔；每次的原始照片、點位、內參樣本、誤差報告與被取代檔案的備份保存在 `Db\Calibration\sessions\<時間>_wand\`，供之後與棋盤格外參方法比較。這版先實作校正桿方法。
 
-**8 顆粉紅球十字架的自動 HSV／PnP 外參**：執行 `python Src/UI_Control/calibrate.py --cross`。預設讀取 `intrinsic_20261008` 與 `Calibrate_Picture_Auto`，使用正面 SN24380115、側面 SN21055356，輸出毫米制外參、球號標註與品質報告到新的 `Db/Calibration/cross_pnp/<時間>/`。此功能不覆蓋現行 F 校正；世界座標、拍攝建議、量測限制與本批外參和現場位置的差異見 本文件第 4 節〈8 顆螢光粉球十字架〉。
+**木框 PnP 外參**：執行 `python Src/UI_Control/calibrate.py --wood-frame`，引導收集約 15 組照片並儲存最佳一組。**手動原點／XYZ 軸／尺度**：執行 `python Src/UI_Control/calibrate.py --manual-coordinates`，選擇正面及側面圖片後標註並匯出 JSON。兩種視窗的操作與限制見第 4 節。
 
 **只提取螢光粉球**：執行 `python Src/calibration/extract_fluorescent_balls.py`，不需要內參或 PnP。可用 `--input` 指定單張或資料夾，輸出遮罩、彩色前景、候選球心 JSON 與預覽圖；詳見 本文件第 5 節〈獨立螢光粉球提取〉。
 
@@ -89,7 +90,7 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 ## 3. 棋盤格內參、PnP 與 8-point 真實距離量測
 
-獨立離線流程，依賴現有環境的 OpenCV、NumPy、SciPy，不需要相機 SDK、Qt 或骨架推論模型，不改動現行十字架校正與 `fundamental.json`。
+獨立離線流程，依賴現有環境的 OpenCV、NumPy、SciPy，不需要相機 SDK、Qt 或骨架推論模型，不改動木框校正與 `fundamental.json`。
 
 ### 本次設定
 
@@ -254,187 +255,88 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 涵蓋已知幾何、去畸變、PnP 基線、8-point 獨立尺度、平面退化、棋盤點序、地面投影、跨幀欄位，以及缺點、錯點和影像尺寸不符時的拒絕行為。
 
-## 4. 8 顆螢光粉球十字架：HSV 偵測與公制 PnP 外參
+## 4. 木框 PnP 外參與手動座標標註
 
-7×7 內角點、每格 100 mm 的棋盤內參，以及 PnP／8-point 兩條影片距離量測流程，另見 本文件第 3 節〈棋盤格內參、PnP 與 8-point 真實距離量測〉。
+木框外參使用既有相機內參及已確認的固定木框三維點位，不需在 UI 輸入尺寸。舊十字架計算程式與專用測試已移除，既有 `Db/` 照片及校正資料保留。
 
-在專案根目錄，以已安裝 OpenCV、NumPy 的 `Pitcher` 環境執行：
+### 木框 PnP 視窗
 
 ```powershell
 conda activate Pitcher
-python Src/UI_Control/calibrate.py --cross
+python Src/UI_Control/calibrate.py --wood-frame
+# 亦可直接啟動
+python Src/UI_Control/calibrate_wood_frame.py
 ```
 
-也可以執行 `python Src/calibration/calibrate_cross.py`。`--help` 列出所有參數；離線功能不需要相機 SDK、Qt 或骨架模型。原本 `calibrate.py` 不加參數仍開啟原校正精靈。
+1. 選擇正面 CF、側面 CS 的既有內參，核對相機角色、序號及影像尺寸。鏡頭、焦距／對焦、影像裁切或解析度改變後，需先重做適用的內參。
+2. 核對固定木框點位表：正面依 F1→F4，側面依 S1→S4 標註。紙板厚度已確認為 `0.3 cm = 3 mm`，已反映在下表座標，不能再次加上厚度。
+3. 依拍攝指引收集約 15 組正面／側面照片（目標可調整為 5–30 組），也可匯入含 `cf/`、`cs/` 且兩邊檔名相同的既有照片。匯入在背景執行、顯示進度並可取消，單次可只補一組；取消或失敗會保留既有照片與標記。每組兩張必須是同一木框姿態，兩台相機保持固定；選擇清楚、可見且有足夠間隔的標記點。
+4. 在兩張圖上分別依序標註四點；模糊、遮擋或誤拍的照片可取消「採用這組」略過，原始照片仍保留。點位與略過設定自動保存到 `Db/Calibration/sessions/<時間>_wood_frame/session.json`；可在設定頁載入工作階段接續標註。至少需完成並採用 5 組才能計算，建議收集約 15 組不同姿態。尺寸與標記錯誤不能靠增加照片數修正。
+5. 計算每組 PnP 並檢查其他姿態的雙機一致性，依評分選擇最佳一組。結果頁顯示最佳組、雙機基線、各組 RMS 與未採用原因，也可返回檢視最佳組照片。計算結果先存至該工作階段的 `best_stereo.json`；按「儲存最佳一組外參」可匯出至預設 `Db/Calibration/wood_frame/stereo.json` 或自選位置，供既有公制校正讀取器使用。
 
-只需提取螢光粉球時，使用獨立入口 `python Src/calibration/extract_fluorescent_balls.py`。單張／資料夾輸入、HSV 參數與球心輸出見 本文件第 5 節〈獨立螢光粉球提取〉；此入口不讀內參，也不執行 PnP。
+兩組點使用同一木框世界座標，單位全部為 mm：
 
-本次使用者確認的預設值：
+| 視角／點位 | X | Y | Z |
+|---|---:|---:|---:|
+| 正面 F1 | 80 | 320 | -3 |
+| 正面 F2 | 320 | 320 | -3 |
+| 正面 F3 | 320 | 80 | -3 |
+| 正面 F4 | 80 | 80 | -3 |
+| 側面 S1 | 403 | 320 | 30 |
+| 側面 S2 | 403 | 320 | 270 |
+| 側面 S3 | 403 | 80 | 270 |
+| 側面 S4 | 403 | 80 | 30 |
 
-| 項目 | 設定 |
-| --- | --- |
-| 內參 | `Db/Calibration/intrinsic_20261008/intrinsics_all.json` |
-| 照片 | `Db/Record/Calibrate_Picture_Chessboard`，cf、cs 各 10 張同名照片 |
-| cf 正面 | SN24380115 |
-| cs 側面 | SN21055356 |
-| 照片大小 | 1920 × 1084，必須和內參一致 |
-| 裝置與相機 | 十組之間固定不動 |
-| 桿的前後差 | 面向 ball6 在左、ball8 在右的裝置正面，橫桿在直桿後方 15 mm |
+正面與側面標註的是不同平面上的各自四點，各平面仍可能有姿態歧義，需檢查品質結果與實際相機位置。拍攝時若移動木框，各組外參以該組木框座標為準，不能直接平均不同原點／方向的世界外參。需要固定場地座標時，應把木框放在已量測且可重現的基準位置，或另行提供木框到場地的剛體變換。
 
-### 世界座標與量測定義
+外參沿用 OpenCV 方向：`X_camera = R_world_to_camera @ X_world + t_world_to_camera_mm`。`t` 是世界原點在相機座標中的位置；相機的世界位置是 `C = -R.T @ t`。像素重投影誤差用於挑選照片，但不等於整個投球範圍的實際量測精度；使用前仍需以未參與校正的已知距離核對。
 
-以 **ball3 球心為原點**，X 軸由 ball6 指向 ball8，Z 軸由 ball5 指向 ball1（裝置正確鉛直時就是向上），Y 軸依右手定則 `Y = Z × X`，指向裝置背面。所有三維數值及平移量均為 **毫米**。
+輸出使用 `metric_stereo_v1`，頂層 `R_cs_from_cf`／`t_cs_from_cf_mm` 為 CF→CS 相對外參，供既有三角化流程讀取。`world.cameras.cf/cs` 則保存兩台相機相對於最佳組木框的外參；檔案也保留內參快照、最佳組 ID、全部來源點位、各組診斷與評分。其他照片用於選擇相機間一致的候選解，沒有平均不同擺位的木框世界外參。
 
-| 球 | X (mm) | Y (mm) | Z (mm) |
-| --- | ---: | ---: | ---: |
-| ball1 | 0 | 0 | 150 |
-| ball2 | 0 | 0 | 100 |
-| ball3 | 0 | 0 | 0 |
-| ball4 | 0 | 0 | -150 |
-| ball5 | 0 | 0 | -350 |
-| ball6 | -350 | 15 | 0 |
-| ball7 | -150 | 15 | 0 |
-| ball8 | 100 | 15 | 0 |
-
-這裡的 15 mm 是**前後深度差，沒有將橫桿降低 15 mm**。ball3 是直桿上的唯一中心球；橫桿在 `(0, 15, 0)` 處的投影交點沒有額外一顆球，因此共 8 顆。
-
-模型將所述 20、15、10 cm 解讀為沿橫桿 X 方向的球心位置差；例如 ball7 到 ball3 的三維直線距離是 `sqrt(150² + 15²)`，不是恰好 150 mm。請實測**球心到球心**位置、兩組球心平面的深度差，而非桿面間距或兩球表面間隙。球的黏貼厚度、大小及安裝偏移都會影響外參。若間隔實際是三維斜距，應修改 `object_points()` 的實測座標。
-
-ball3 不是地面點。若量到 ball3 球心離指定地面平面 H mm，則地面為 `Z = -H`，執行時提供：
-
-```powershell
-# 500 僅是範例；必須改成現場量到的球心高度
-python Src/UI_Control/calibrate.py --cross --ball3-height-mm 500
-```
-
-若希望以投手板前緣中央的地面點作為正式原點，請量出該點在上述座標中的三維位置，再平移世界座標；若要 Y 軸代表「往本壘」，也要現場對準或測量旋轉。不能因裝置放在投手板上，就假設 ball3 位於板中心正上方、Y 一定指向本壘，或 ball5 位於地面。
-
-跨步量測需先定義事件與點位，例如「前腳落地時，前腳接觸點到投手板指定基準點的水平距離」。水平距離為 `norm((B-A)[:2])`；沿投球方向的跨步長則應將位移投影到實測的本壘方向。骨架踝關節不是鞋底接觸點，兩者定義不可混用。
-
-### 十字架放置位置會影響什麼？
-
-**會影響外參的座標定義與估計品質，不只影響驗證（verify）。** 外參是兩個座標系之間的旋轉、平移；本程式把裝置局部座標直接當成世界座標，因此 ball3 的位置與桿的方向都參與定義。
-
-| 情況 | 影響 |
-| --- | --- |
-| 保持相機不動，移動／旋轉十字架，再以 ball3 為原點校正 | 世界座標跟著裝置變動，所以每台輸出的 R、t 會改變；不是相機真的移動 |
-| 固定投手板／場地世界座標，移動十字架且量得每個位置的裝置到世界變換 | 可以把各次結果轉回相同場地座標；理想情況下固定相機的世界外參一致，實際會有估計誤差 |
-| 相機不動，只比較兩台相機彼此的相對 R、t | 理想情況不隨十字架擺位改變；兩台必須看到同一個裝置姿態並正確對應球號 |
-| 裝置更遠、更小、靠近影像邊緣，或其中一台幾乎沿著桿看 | 球心定位、畸變模型誤差、遮擋與幾何條件改變，外參估計精度也會變化 |
-| 校正完成後，在不同位置放已知距離的標記做驗證 | 使用已固定的外參重建，才能檢查該量測區域的精度；不是把每個驗證位置重新設原點再校正 |
-
-若場地點 `X_world = R_world_from_device @ X_device + t_world_from_device`，先用裝置點求出的 PnP 是 `T_camera_from_device`，則換到場地座標的外參為：
-
-```text
-T_camera_from_world = T_camera_from_device @ inverse(T_world_from_device)
-```
-
-此處皆為 4×4 齊次變換。這由 [OpenCV PnP 的物體／世界到相機座標慣例](https://docs.opencv.org/4.13.0/d5/d1f/calib3d_solvePnP.html)推得；目前工具沒有自動量測或套用各擺位的裝置到場地變換，不能直接混合多個位置共同解算。
-
-**校正完成後可以移走十字架。** 只要相機、鏡頭設定及所採用的世界座標基準不變，移走標定物不會使已保存的外參失效；改變的是「在新擺位重新以 ball3 為原點校正」時的結果。
-
-**下一次收集可這樣安排：** 先選一個兩台都能清楚看見全部球的位置，設剛性底座、量球心幾何、校正鉛直，記錄 ball3 相對投手板的位置與裝置方向；固定裝置拍一組作校正。保持相機不動，再到投手板、預期落腳區及不同高度拍獨立已知距離作驗證。不同擺位請分資料夾記錄；本程式的共同 PnP 解算只接受同一固定擺位的重複照片。
-
-單純變更座標原點或剛性旋轉不會改變兩個三維點的歐氏距離；但要把 XY 距離當作水平跨步，Z 必須確實鉛直。要量「相對投手板」的位置或「朝本壘方向」的跨步，還必須建立裝置座標與場地基準的關係。
-
-### 偵測、配對與解算
-
-1. 將原始 BGR 影像轉成 HSV。預設 H=135–168、S≥105、V≥50，OpenCV 8-bit 的 H 範圍是 0–179。可用 `--h-min`、`--h-max`、`--s-min`、`--v-min` 調整，支援跨 H=0 的範圍。
-2. 小幅形態學開運算去除雜點，再以距離轉換峰值分割黏連的粉紅球，用各區域重心取得次像素座標。這些是影像輪廓重心；遮擋、陰影、球體透視仍會造成球心偏差。
-3. 用去畸變後的候選中心找出五點直桿、5:10:15:20 的間距特徵；橫桿三個獨立球另行配對。依三維幾何評分，不直接用畫面的左右順序，也不任取最大八個色塊。
-4. 以**原始像素 + K + 畸變係數**執行 SQPnP；使用 IPPE 的平面近似提供另一組初始值，再以真正包含 15 mm 深度差的三維點執行 LM 最佳化。輸出正深度解、替代姿態及模糊性資訊，不把近似平面結果當成最終模型。
-5. 必須有完整八點，且每點都參與誤差檢查。預設每張 RMS≤2 px、最大誤差≤4 px，球號的最佳與次佳排列若差距不足 0.2 px，則拒絕。缺球、過多背景色塊或幾何不符會保留失敗原因與預覽，不會補造球心。
-6. 固定拍攝模式下，與逐球中位座標偏移超過 3 px 的整張影像不參與共同解算。每台至少 3 張，且至少 60% 的合格影像需穩定；剩餘所有八點觀測共同求一個 R、t，**不平均旋轉向量**。此檢查只偵測像素移動，無法證明場景真的完全靜止。
-
-HSV 全畫面出現過多候選時，可限制搜尋區域；座標仍輸出為原始全圖像素：
-
-```powershell
-python Src/UI_Control/calibrate.py --cross --roi-cf 800 650 350 350 --roi-cs 850 650 250 330
-python Src/UI_Control/calibrate.py --cross --detect-only
-```
-
-ROI 範例針對本批照片的位置；之後拍攝必須重新檢查。少於 8 顆、半徑小於 3 px、太接近側視而嚴重重疊，都可能需要重拍，不能只放寬誤差門檻。
-
-### 輸出與後續重建
-
-每次寫到新的 `Db/Calibration/cross_pnp/<時間>/`，亦可 `--output <尚不存在的目錄>`：
-
-- `report.json`：每張候選球、ball1–ball8 像素位置、各點誤差、接受／拒絕原因、共同解算、內參快照、相機序號、世界定義及警告。
-- `extrinsics.json`：去掉逐張偵測細節，保留兩台外參、投影矩陣、內參和量測限制。
-- `summary.txt`：簡短摘要。
-- `cf/`、`cs/`：各張 HSV 遮罩、球號標註及放大局部圖。黃色圈為偵測中心，綠色十字為 PnP 重投影。
-
-外參採 OpenCV 方向：`X_camera = R_world_to_camera @ X_world + t_world_to_camera_mm`。**t 不是相機的世界位置**；相機世界位置是 `C = -R.T @ t`。相機座標 X 向右、Y 向下、Z 向前。
-
-`P_undistorted_pixels = K @ [R | t]` 只能搭配 `cv2.undistortPoints(..., P=K)` 得到的去畸變像素。另有 `triangulate_world()`，會先去畸變成正規化座標，再用兩台 `[R | t]` 三角化，直接回傳上述世界座標的毫米值：
+在主程式「3D」頁的「校正設定」選擇 PnP，再選取木框匯出的 `stereo.json` 並套用。`main_metric.py` 可用 `--calibration Db/Calibration/wood_frame/stereo.json` 指定。匯出木框外參不會自動取代舊校正桿的 `fundamental.json` 或舊錄影快照。
 
 ```python
-# 從專案根目錄使用
-import json
-import numpy as np
-from Src.calibration.cross_calibration import triangulate_world, ground_distance_mm
+from Src.calibration.wood_frame import load_wood_frame_rig
 
-with open("Db/Calibration/cross_pnp/<本次時間>/extrinsics.json", encoding="utf-8") as f:
-    result = json.load(f)
-# 使用前必須處理 warnings，並完成獨立實距驗證。
-front, side = result["cameras"]["cf"], result["cameras"]["cs"]
-f, s = result["intrinsics"]["cf"], result["intrinsics"]["cs"]
-points_mm = triangulate_world(
-    front_pixels, side_pixels, front, side,  # 同步、同一物理點的 Nx2 原始像素
-    np.array(f["intrinsic_matrix"]), np.array(f["distortion_coefficients"]),
-    np.array(s["intrinsic_matrix"]), np.array(s["distortion_coefficients"]))
-distance_mm = ground_distance_mm(points_mm[0], points_mm[1])
+rig = load_wood_frame_rig("Db/Calibration/wood_frame/stereo.json")
+front_pose = rig["world"]["cameras"]["cf"]
+rotation = front_pose["R_camera_from_world"]
+translation_mm = front_pose["t_camera_from_world_mm"]
 ```
 
-單台相機不能從一個像素恢復任意三維位置。只有已知點在某平面上時，才可用 `pixel_to_plane(pixel, pose, K, dist, plane_z_mm)` 求射線和平面的交點；踝關節、膝蓋與抬起的腳不應直接投到地面冒充真實位置。土坡不是單一平面時，也不能將所有接觸點套用同一 Z。
-
-本功能**不覆蓋現行 `fundamental.json` 或內參**。舊流程由 F/recoverPose 取得的 t 只有方向、沒有公制尺度；新輸出的 F 也只適用於去畸變像素，不能直接放入舊的原始像素 F 流程。後續骨架程式要改用本檔保存的兩台公制 R、t，並將此校正快照綁定錄影，才能維持尺度與座標定義。本次已提供可重用的三角化函式，尚未修改骨架播放器或錄影快照流程。
-
-### 本批照片的實測結果（2026-10-10）
-
-預設參數下，20 張照片均找到 8 顆球並完成編號。共同解算排除球心偏移較大的影像：
-
-| 相機 | 個別成功 | 共同解算張數 | 共同 RMS | 最大像素誤差 | 推估到 ball3 距離 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| cf / SN24380115 | 10/10 | 8 | 1.681 px | 3.466 px | 31.871 m |
-| cs / SN21055356 | 10/10 | 7 | 0.837 px | 1.962 px | 3.941 m |
-
-cf 排除 01、10；cs 排除 01、03、05。排除依據是影像座標偏移，不代表已判定裝置確實移動；分割、手部遮擋、球心偏差也可能造成差異。
-
-**此組外參仍需查驗，不能直接宣稱可以準確測量跨步距離。** 正面指定內參 fx≈12462.87 px、fy≈12474.94 px，PnP 推得相機距離約 31.9 m，球心原點以上高度約 10.0 m。長焦、遠距離拍攝可以有很大的像素焦距，不能單憑 fx 大就判定內參錯誤；應以現場位置與獨立實距驗證。程式照指定資料計算，不自行替換成其他序號。
-
-使用者已確認：**正面 SN24380115** 水平距離約 22 m、離地約 2.4 m；**70 cm 指裝置底部，不是 ball3 球心**。因此不能使用 `--ball3-height-mm 700`。若底部到 ball3 球心的鉛直高度為 h mm，則 ball3 離地高度為 `H = 700 + h` mm；兩個高度必須基於同一水平基準。不能直接假設底部就是 ball5 球心。
-
-目前正面 PnP 推得水平距離 30.25 m、相機高於 ball3 10.02 m，直線距離 31.87 m；水平距離仍與現場約 22 m 不符。ball3 實際高度尚未量得，因此移除先前以 70 cm 當成球心高度計算的地面高度、直線距離與角度比較。另一個 PnP 解推得相機在 ball3 下方約 9.93 m，也須排查。使用者將重新收集資料，原校正輸出保留供比較。
-
-量得 H 後再用 `--ball3-height-mm H` 記錄地面 `Z=-H`。此參數只設定地面位置，**不會改變以 ball3 為原點的 PnP R、t，也不會修正距離差異**。不能只選像素誤差較小的一解，或把 t 直接縮放到 22 m。
-
-正面還存在兩個差異很大但重投影誤差相近的解，RMS 約 1.681 與 1.708 px，分張姿態差可達約 50°。這正說明小像素誤差不等於外參可信。15 mm 深度差、幾乎平面的十字架和錯配／不適用的內參，都需要排查。
-
-同一校正裝置再三角化的三維球心 RMS 約 4.19 mm、最大約 7.75 mm；這只是**擬合資料的自我一致性**，不是獨立精度測試，更不能外推到整個投球活動範圍。所有報告標記 `independently_validated_for_measurement=false`，完整解算後狀態仍為 `review_required`；退出碼 0 只表示程式完成，不表示量測品質通過。
-
-### 拍攝與精度建議
-
-1. **先確認內參適用。** 相機序號、鏡頭、焦距／對焦、解析度、裁切 ROI 與拍內參時一致；固定曝光、白平衡及增益，避免粉紅球過曝失去飽和度。相機或鏡頭一動，須重新估外參。
-2. **固定裝置並保持真正鉛直。** 用剛性底座、水平儀及鉛垂線，避免手持球或遮住球面；本批側面橫桿幾乎端視，中央幾顆球相互重疊、也有手部遮擋，應改善觀測角度。
-3. **增加各相機都看得到的深度結構。** 15 mm 的厚度相對數公尺距離太小，建議另設有明確球號、較大前後差的固定標記或立體校正架；新增點後要把實測三維座標一起更新。球在兩台畫面都應有足夠直徑和清楚間隔，依現場試拍確認，不以數到八個色塊為合格標準。
-4. **重複固定照片只能減少部分隨機誤差。** 十張同位置影像不能消除錯誤內參、錯誤球距或幾何退化。可另拍不同位置與角度檢查，但移動裝置後不可將球號的相同局部座標當成同一世界座標直接合併；需要各位置的已知世界變換或多視角聯合校正。
-5. **在量測範圍內做獨立驗證。** 在投手板、前腳落點及不同高度放置未參與校正、已實測距離的標記，檢查水平距離、垂直高度與左右方向；將可接受誤差依用途訂為 cm 或 mm，不能只用 2 px 判斷。同步雙機拍攝投球，否則快動作的兩台點位不屬於同一瞬間。
-
-參考：[OpenCV PnP 與外參方向](https://docs.opencv.org/4.13.0/d5/d1f/calib3d_solvePnP.html)、[OpenCV HSV inRange](https://docs.opencv.org/4.13.0/da/d97/tutorial_threshold_inRange.html)。
-
-測試：
+### 手動原點、XYZ 方向與尺度視窗
 
 ```powershell
-conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_Control/tests -v
+python Src/UI_Control/calibrate.py --manual-coordinates
+# 亦可直接啟動
+python Src/UI_Control/manual_coordinates.py
 ```
+
+1. 分別選擇正面與側面圖片；可使用與木框校正不同的一組照片。
+2. 在每個視角標記原點，以及 X、Y、Z 正方向的影像端點。兩張圖須表達相同的實體原點與軸方向，像素位置則各自記錄。
+3. 在各視角的「真實尺度」面板另選照片，標出已知距離的 A、B 兩端，輸入真實長度與 mm／cm／m 單位。座標與尺度照片可以不同，但同一視角的相機、解析度及拍攝設定應相同，參考線段需盡量與量測物位於同一深度。
+4. 按「匯出結果 JSON」選擇位置（預設 `Db/Calibration/wood_frame/manual_coordinates.json`）；之後可按「讀取標記 JSON」接續修改。輸出 `manual_coordinates_v1` 保留影像路徑及尺寸、原始像素點位、軸方向、尺度端點、真實長度與局部 `mm_per_pixel`。
+
+程式讀取時使用驗證器，它會檢查版本並重新計算尺度，將相對影像路徑解析到 JSON 所在資料夾：
+
+```python
+from Src.calibration.manual_coordinates import load_document
+
+annotations = load_document("Db/Calibration/wood_frame/manual_coordinates.json")
+front = annotations["views"]["CF"]
+origin_px = front["origin_px"]
+x_direction = front["axis_unit_directions_px"]["X"]
+scale_mm_per_pixel = front["scale"]["mm_per_pixel"]
+```
+
+影像座標原點為左上角，x 向右、y 向下，顯示縮放不改變保存的原圖像素。尺度線段提供該段位置／方向的像素與真實長度關係；透視影像中，不同深度與方向不保證共用同一個比例。這份標註 JSON 用於保存人工定義，**不是由兩張照片的 2D 軸與單條尺度就得到完整透視 3D 外參**。完整公制 3D 重建仍需內參、足夠的已知三維對應點或其他可解的幾何約束。
 
 ## 5. 獨立螢光粉球提取
 
 入口：`Src/calibration/extract_fluorescent_balls.py`。
 核心：`Src/calibration/fluorescent_balls.py`。
 
-只需要 OpenCV 與 NumPy，不讀內參，不計算 PnP，不載入 Qt、相機 SDK 或骨架模型。現有 `calibrate_cross.py` 共用同一個偵測核心，避免兩套 HSV 方法產生不同結果。
+只需要 OpenCV 與 NumPy，不讀內參，不計算 PnP，不載入 Qt、相機 SDK 或骨架模型。此獨立工具保留，不依賴已移除的十字架幾何計算。
 
 ### 執行
 
@@ -483,7 +385,7 @@ python Src/calibration/extract_fluorescent_balls.py --input Db/Record/Calibrate_
 
 球心使用**原始全圖像素**，原點在左上角，x 向右、y 向下。使用 ROI 後也不會變成裁切圖座標，尚未去畸變。
 
-**c1、c2… 是每張圖內按 y 再 x 排序的候選 ID，不是實體 ball1～ball8，也不是跨影格追蹤 ID。** 找到八個候選只代表數量符合，不能證明沒有誤檢或球號正確。實體球號與幾何檢查仍由 `calibrate_cross.py` 進行。
+**c1、c2… 是每張圖內按 y 再 x 排序的候選 ID，不是實體 ball1～ball8，也不是跨影格追蹤 ID。** 找到八個候選只代表數量符合，不能證明沒有誤檢或球號正確。此工具不進行實體球號配對與三維幾何檢查。
 
 數量不足或過多會保留結果並標示 `count mismatch`；讀圖等錯誤會記錄於報告，繼續處理其餘照片。退出碼 0 表示全部照片處理完成，數量不一定符合；有讀圖／處理錯誤則為 2。
 
@@ -540,3 +442,30 @@ python Src/UI_Control/main_metric.py --check --frame 115 --annotations path/to/a
 本機四張原圖重新辨識流程已執行。預設 PnP 校正搭配自動辨識的第 0／115 幀腳跟，最大重投影約 25.25 px，超過 3 px 門檻，因此程式拒絕輸出距離；仍需核對左右腳、對應點、同步與相機設定，不能將這次自動結果視為準確量測。
 
 校正算法、影像條件與限制見 本文件第 3 節〈棋盤格內參、PnP 與 8-point 真實距離量測〉。
+
+## 7. 雙棒八球 8-point 拍照與外參 UI
+
+```powershell
+conda activate Pitcher
+python Src/UI_Control/calibrate.py --two-rods
+# 獨立入口
+python Src/UI_Control/calibrate_two_rods.py
+```
+
+兩根棒子各有四顆直徑 50 mm 的螢光粉球。使用者已確認以下為**球心到球心**間距，不加球半徑或直徑：
+
+| 棒子 | 實體上端至下端 | 相鄰球心距離 (mm) | 第一顆到各顆累積距離 (mm) |
+|---|---|---|---|
+| A | A1、A2、A3、A4 | 200、120、180 | 0、200、320、500 |
+| B | B1、B2、B3、B4 | 100、140、210 | 0、100、240、450 |
+
+1. 選取兩台既有內參與實體相機序號。相機、鏡頭、解析度與裁切固定，接好 GPIO 同步線後連接雙機；兩棒都停穩再拍。空白鍵拍一組，預設 15 組，可增加至 200 組。
+2. 或匯入含 `cf/`、`cs/` 的資料夾，兩側檔名一一對應。**15 組代表每台至少 15 張、合計至少 30 張**。可分批補照片、單次只補一組，但同一工作階段的相機擺位必須相同。背景匯入提供進度與取消按鈕；完成尺寸驗證及保存後才提取球心。取消、讀圖或儲存失敗會清理本次匯入照片，保留既有照片與標記。
+3. 提取沿用 `extract_fluorescent_balls` 使用的 `fluorescent_balls.detect_balls`，不需先執行 CLI 或產生提取 JSON。設定頁可調整 HSV、最小半徑與面積；標記頁可按「調整提取參數」重試本組。
+4. 以去畸變球心的共線性與四點交比提出 A/B 分組。四點交比不能識別整根棒子的倒序，**必須核對兩張照片的實體 A/B 棒與上下編號**；A1/B1 始終指同一個實體上端，不能隨照片上的位置重新編號。可反轉指定視角某根棒子的順序，或選球號後手動點選球心。每組按「確認本組兩視角球號」；修改或重新提取後須再次確認。
+5. 補拍提示依已收集、未略過的球心計算：各影像的棒子中心九宮格涵蓋、直立／斜向／接近水平投影角度，以及同一根棒在不同照片中的影像長度變化。A/B 棒在單張照片中的大小差異不算遠近變化。請在共同可見的量測區改變位置、方向、距離與前後傾斜，避免球互相遮擋。影像大小變化也可能受傾斜影響，不能當作真實深度或三維角度的量測。涵蓋提示不強制要求拍到兩相機無法共同看見的區域。
+6. 至少完成並確認 15 組不同姿態才可計算。計算前會檢查重複姿態：若兩視角對應球心的 RMS 位移都不超過 1 px，即使檔名不同仍拒收，避免重複照片同時進入擬合與保留驗證。依提示取消重複組的「採用這組」，再改變棒子位置或角度補拍。原圖與草稿保存於 `Db/Calibration/sessions/<時間>_two_rods/session.json`，可從設定頁讀回。
+7. 約 80% 組別用於外參與尺度擬合，約 20%（每第 5 組）保留檢查。RANSAC 選內點，normalized 8-point 估計 F，再求 E、判定正深度及極線最佳化；以每根棒子內的已知距離恢復毫米尺度。**不假設兩根棒子間距固定，也不使用 PnP。** 結果列出各組重投影及棒長誤差；退化幾何、錯配、尺度不一致或保留組驗證不佳會拒絕輸出。
+8. 工作階段自動保存 `stereo.json`；另按「匯出 8-point 外參」可存至預設 `Db/Calibration/two_rods/stereo.json`。主程式「3D → 校正設定」選 **8Points**，選取此檔後套用。此工具不改寫舊 F 矩陣或錄影快照。
+
+結果為 `metric_stereo_v1`、`method=8point`、單位 mm，世界座標基準為正面相機。輸出包含內參、CF→CS 的 R/t、雙棒規格、原始點位、訓練／保留組別與診斷，可用既有 `Src.calibration.chessboard_extrinsic.load_rig(path)` 讀取。球的影像區域中心近似球心投影，近距離及畫面邊緣仍可能有偏差，正式使用需以額外已知距離驗證精度。

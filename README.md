@@ -126,16 +126,26 @@ python Src/UI_Control/main.py
 
 ## 相機校正
 
-新架設或移動相機後需要重新校正，結果自動存到 `Db\Calibration\`，錄影時會把當下的校正值一起存進該筆錄影資料夾。
+新架設或移動相機後需要重新校正。木框外參讀取兩台既有內參；尚未完成內參時，先用 `Src/UI_Control/calib.py` 進行棋盤格內參校正。
 
 ```powershell
 conda activate Pitcher
-python .\Src\UI_Control\calibrate.py
+python Src/UI_Control/calibrate.py --wood-frame
 ```
 
-按「開始校正」後依畫面指示完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。
+手動原點、XYZ 軸與尺度標註使用另一個視窗：
 
-其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
+```powershell
+python Src/UI_Control/calibrate.py --manual-coordinates
+```
+
+木框工具讀取既有內參，使用已確認的固定木框點位（紙板厚度 `0.3 cm = 3 mm`），引導拍攝約 15 組正面／側面照片、標註對應點，再評分並保存最佳一組。手動工具可分別載入兩個視角的照片，標記原點、XYZ 正方向及已知長度線段，匯出 JSON 後再次讀取；這些 2D 標記不能單獨取代完整的 3D 外參校正。
+
+木框最佳外參預設匯出至 `Db/Calibration/wood_frame/stereo.json`。主程式「3D → 校正設定」選擇 PnP，再選取此檔並套用。舊校正桿流程仍可用不帶參數的 `calibrate.py` 啟動；木框匯出不會自動更新該流程的 F 矩陣或錄影快照。
+
+棋盤格、木框與手動標註的詳細操作見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。舊十字架的計算程式已移除，獨立螢光球提取工具仍保留。
+
+**雙棒八球 8-point 校正**：執行 `python Src/UI_Control/calibrate.py --two-rods`。支援同步拍照或匯入 15 組以上 `cf/cs` 照片，自動提取螢光粉球，顯示缺少的位置、投影角度與遠近變化提示。兩棒各 4 顆、球徑 50 mm，A 棒球心距離 200／120／180 mm，B 棒 100／140／210 mm。確認兩視角的 A1–A4／B1–B4 後計算，預設匯出 `Db/Calibration/two_rods/stereo.json`，在 3D 校正設定選 **8Points** 後載入。
 
 ## 資料夾結構
 

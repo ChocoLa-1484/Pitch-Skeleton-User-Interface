@@ -18,10 +18,18 @@ import sys
 import time
 from datetime import datetime
 
-# Offline eight-ball workflow is available before loading Qt/camera dependencies.
+# The independent tools do not initialize the legacy camera/intrinsic wizard.
+if __name__ == "__main__" and "--two-rods" in sys.argv:
+    from Src.UI_Control.calibrate_two_rods import main as rods_main
+    sys.exit(rods_main([argument for argument in sys.argv[1:] if argument != "--two-rods"]))
+if __name__ == "__main__" and "--wood-frame" in sys.argv:
+    from Src.UI_Control.calibrate_wood_frame import main as wood_main
+    sys.exit(wood_main([argument for argument in sys.argv[1:] if argument != "--wood-frame"]))
+if __name__ == "__main__" and "--manual-coordinates" in sys.argv:
+    from Src.UI_Control.manual_coordinates import main as manual_main
+    sys.exit(manual_main([argument for argument in sys.argv[1:] if argument != "--manual-coordinates"]))
 if __name__ == "__main__" and "--cross" in sys.argv:
-    from Src.calibration.calibrate_cross import main as cross_main
-    sys.exit(cross_main([argument for argument in sys.argv[1:] if argument != "--cross"]))
+    raise SystemExit("十字架工具已移除，請改用 --wood-frame。")
 
 UI_DIR = Path(__file__).resolve().parent
 from Src.paths import CAMERA_CONFIG_DIR

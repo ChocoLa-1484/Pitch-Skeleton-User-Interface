@@ -4,11 +4,11 @@
 
 | 目錄 | 用途 |
 |---|---|
-| `Src/UI_Control/` | `main.py`、`main_metric.py`、`calib.py`、`calibrate.py` 等 GUI 入口 |
+| `Src/UI_Control/` | 主程式、內參／校正桿精靈、`calibrate_wood_frame.py` 木框 PnP、`manual_coordinates.py` 座標／尺度標註 |
 | `Src/UI_Control/widgets/` | 相機、2D／3D 回放、量測、攝影機設定視窗 |
 | `Src/UI_Control/forms/` | Qt Designer `.ui` 與對應 Python 介面 |
 | `Src/UI_Control/rendering/`、`viewers/`、`controllers/` | 圖像繪製、3D 檢視、互動控制 |
-| `Src/calibration/` | 內參／外參計算、校正資料儲存、棋盤與螢光球 CLI |
+| `Src/calibration/` | 內參／外參計算、木框 PnP、標註資料儲存、棋盤與獨立螢光球 CLI |
 | `Src/cameras/` | FLIR 驅動、擷取／影片執行緒、硬體設定；YAML 位於 `config/` |
 | `Src/pose/` | 現行模型、投手追蹤、骨架推論 |
 | `Src/analysis/` | 動作分析、量測流程、分析結果讀寫 |
@@ -25,11 +25,16 @@
 ```powershell
 python Src/UI_Control/main.py
 python Src/UI_Control/calibrate.py
+python Src/UI_Control/calibrate.py --wood-frame
+python Src/UI_Control/calibrate.py --manual-coordinates
+python Src/UI_Control/calibrate.py --two-rods
 python Src/calibration/calibrate_chessboard.py
 python Src/calibration/calibrate_chessboard_extrinsic.py --method both
 python Src/tools/measure_stride_pnp.py
 python Src/tools/measure_stride_8point.py
 ```
+
+木框工具依拍攝指引收集約 15 組正面／側面照片，讀取既有內參，使用已確認的固定木框點位（紙板厚度 `0.3 cm = 3 mm`），計算各組品質並保存最佳外參。手動座標工具可另外選兩張照片、標記原點與 XYZ 正方向、標出尺度線段及輸入真實長度，再匯出／讀回 JSON。這些工具也可用各自的 `calibrate_wood_frame.py`、`manual_coordinates.py` 入口啟動；詳細資料格式與限制見 [CALIBRATION.md](CALIBRATION.md)。已移除舊十字架計算程式，獨立螢光球提取保留。
 
 也支援 `python -m Src.UI_Control.main` 等模組入口。舊棋盤 CLI 路徑已搬移，請更新 IDE 的啟動設定；倉庫內的 imports、命令提示與文件已改用新位置。內部使用 `Src.*` 完整匯入，避免與第三方的 `utils`、`models` 混用。`main.py` 保持先載入 Qt／vispy 與模型，再載入攝影機 SDK 的順序，避免 Windows DLL 衝突。
 

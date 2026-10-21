@@ -43,13 +43,17 @@ class ProjectLayoutTests(unittest.TestCase):
         commands = [
             ['Src/calibration/calibrate_chessboard.py', '--help'],
             ['Src/calibration/calibrate_chessboard_extrinsic.py', '--help'],
-            ['Src/calibration/calibrate_cross.py', '--help'],
             ['Src/calibration/extract_fluorescent_balls.py', '--help'],
             ['Src/tools/measure_stride_pnp.py', '--help'],
             ['Src/tools/measure_stride_8point.py', '--help'],
             ['Src/tools/extract_frame.py', '--help'],
             ['Src/UI_Control/main_metric.py', '--help'],
-            ['Src/UI_Control/calibrate.py', '--cross', '--help'],
+            ['Src/UI_Control/calibrate_wood_frame.py', '--help'],
+            ['Src/UI_Control/calibrate_two_rods.py', '--help'],
+            ['Src/UI_Control/calibrate.py', '--two-rods', '--help'],
+            ['Src/UI_Control/manual_coordinates.py', '--help'],
+            ['Src/UI_Control/calibrate.py', '--wood-frame', '--help'],
+            ['Src/UI_Control/calibrate.py', '--manual-coordinates', '--help'],
         ]
         with tempfile.TemporaryDirectory() as cwd:
             for command in commands:
