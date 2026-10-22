@@ -133,16 +133,19 @@ python Src/UI_Control/main.py
 | 項目 | 方法 |
 |---|---|
 | 內參（每台相機各做一次） | 即時拍攝棋盤格；或讀取已拍好的照片資料夾 |
-| 外參（選一種） | **RoMa（不需道具，用當天錄影，研究測試中）**；校正桿手點（學姊方法）；校正桿 3D 驗證（學姊 03）；棋盤格 PnP／8Points；粉紅球十字架 |
+| 外參（選一種） | **RoMa（不需道具，用當天錄影，研究測試中）**；校正桿手點（學姊方法）；校正桿 3D 驗證（學姊 03）；棋盤格 PnP／8Points；木框 PnP；雙棒八球 8-point |
+| 其他 | 手動座標標註（原點、XYZ 方向、已知長度；只是標註，不能單獨當作外參） |
 
 拍內參時板子要上下、左右、斜向都傾斜；只朝同一方向轉時程式會警告（fx 會算不準）。
 
-**用 RoMa 做外參**（第一次使用前需安裝 `Roma` 環境，見 [docs/CALIBRATION.md 第 7 節](docs/CALIBRATION.md)）：
+**用 RoMa 做外參**（第一次使用前需安裝 `Roma` 環境，見 [docs/CALIBRATION.md 第 8 節](docs/CALIBRATION.md)）：
 
 1. 校正中心選「即時拍攝棋盤格」→「開啟」，勾選「只做內參」，完成兩台內參。
 2. 校正中心選「RoMa」，按「加入錄影資料夾…」選當天的錄影（例如 `Db\Record\<日期>_Pitcher01`），勾選「存成目前的外參」，按「開始計算」。
 
-其他校正方法（棋盤格、螢光粉球十字架）、舊的分步工具與詳細說明，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
+**木框 PnP、雙棒八球**：需要先有兩台內參。結果分別存到 `Db\Calibration\wood_frame\stereo.json`、`Db\Calibration\two_rods\stereo.json`，使用時在主程式「3D」分頁的校正方式選「PnP」或「8Points」，按「選擇校正檔」選這個檔案再「套用設定」。這兩種方法尚未用實體相機驗證。
+
+各方法的操作細節、舊的分步工具，見 [docs/CALIBRATION.md](docs/CALIBRATION.md)。
 
 ## 資料夾結構
 
@@ -158,6 +161,6 @@ Db\                      ← 不在 git 裡
         └─ calibration.json           錄影當下的校正值
 environment\             環境版本鎖定檔
 Src\UI_Control\          主程式視窗
-Src\calibration\         校正工具（chessboard_cross：棋盤格／十字架、roma：RoMa 外參）
+Src\calibration\         校正工具（校正中心、木框、雙棒；chessboard_cross：棋盤格；roma：RoMa 外參）
 docs\                    開發文件
 ```

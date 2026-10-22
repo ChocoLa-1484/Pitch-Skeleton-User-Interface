@@ -27,7 +27,7 @@ class CalibrationCenterTests(unittest.TestCase):
     def test_every_method_has_a_page(self):
         self.assertEqual(self.window.methods.count(), self.window.pages.count())
         titles = [self.window.methods.item(i).text().strip() for i in range(self.window.methods.count())]
-        for keyword in ('RoMa', '校正桿手點', '3D 驗證', '棋盤格', '十字架', '即時拍攝', '照片資料夾'):
+        for keyword in ('RoMa', '校正桿手點', '3D 驗證', '棋盤格', '木框', '雙棒', '手動座標', '即時拍攝', '照片資料夾'):
             self.assertTrue(any(keyword in t for t in titles), keyword)
 
     def test_roma_runs_in_roma_env_with_options(self):
@@ -61,17 +61,15 @@ class CalibrationCenterTests(unittest.TestCase):
         self.assertTrue(self.sent[1][1][1].endswith('calibrate_chessboard_extrinsic.py'))
         self.assertEqual(self.sent[1][1][-1], 'pnp')
 
-    def test_cross_requires_cf_cs_folders(self):
-        with tempfile.TemporaryDirectory() as folder, patch.object(QMessageBox, 'warning') as warning:
-            self.window.cross_images.edit.setText(folder)
-            self.window.run_cross()
-        warning.assert_called_once()
-        self.assertEqual(self.sent, [])
+    def test_cross_tool_removed(self):
+        titles = [self.window.methods.item(i).text() for i in range(self.window.methods.count())]
+        self.assertFalse(any('十字架' in t for t in titles))
 
     def test_window_tools_exist(self):
         for script in (center.CAL / 'calibrate.py', center.CAL / 'calib.py',
                        center.ROOT_DIR / 'Src' / 'legacy' / 'calibration' / '03_3d.py',
-                       center.CAL / 'roma' / 'roma_extrinsic.py'):
+                       center.CAL / 'roma' / 'roma_extrinsic.py', center.CAL / 'calibrate_wood_frame.py',
+                       center.CAL / 'calibrate_two_rods.py', center.CAL / 'calibrate_manual_coordinates.py'):
             self.assertTrue(script.is_file(), script)
 
 

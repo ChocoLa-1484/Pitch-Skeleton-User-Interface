@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 
 import Src.calibration.chessboard_cross.extract_fluorescent_balls as extraction
-from Src.calibration.chessboard_cross.fluorescent_balls import detect_balls, read_image, write_image
+from Src.calibration.chessboard_cross.fluorescent_balls import DetectionConfig, detect_balls, read_image, write_image
 
 
 def three_balls():
@@ -26,11 +26,11 @@ def three_balls():
 
 
 class ExtractionTests(unittest.TestCase):
-    def test_imports_without_calibration_and_preserves_existing_api(self):
+    def test_imports_without_pnp_calibration_and_validates_detector_config(self):
         code = """
 import sys
 from Src.calibration.chessboard_cross import extract_fluorescent_balls
-assert 'Src.calibration.chessboard_cross.cross_calibration' not in sys.modules
+assert 'Src.calibration.wood_frame' not in sys.modules
 assert 'Src.calibration.calibration_workflow' not in sys.modules
 assert 'PyQt5' not in sys.modules
 assert 'PySpin' not in sys.modules
@@ -38,10 +38,10 @@ assert 'PySpin' not in sys.modules
         completed = subprocess.run([sys.executable, "-c", code], cwd=str(UI_DIR.parents[1]),
                                    capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        from Src.calibration.chessboard_cross import cross_calibration
-        self.assertIs(cross_calibration.detect_balls, detect_balls)
-        old_config = cross_calibration.DetectionConfig(135, 168, 105, 50, 3, 20, 2500, 24)
-        old_config.validate()
+        config = DetectionConfig(135, 168, 105, 50, 3, 20, 2500)
+        config.validate()
+        candidates, _ = detect_balls(three_balls(), config)
+        self.assertEqual(len(candidates), 3)
 
     def test_single_unicode_image_roi_coordinates_and_foreground(self):
         with tempfile.TemporaryDirectory() as folder:

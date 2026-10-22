@@ -246,7 +246,7 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 | `Src/UI_Control/widgets/` | 相機、2D／3D 回放、量測、攝影機設定視窗 |
 | `Src/UI_Control/forms/` | Qt Designer `.ui` 與對應 Python 介面 |
 | `Src/UI_Control/rendering/`、`viewers/`、`controllers/` | 圖像繪製、3D 檢視、互動控制 |
-| `Src/calibration/` | 校正工具：`calibrate.py`、`calib.py`（視窗）、校正檔讀寫；`chessboard_cross/`（同學的棋盤格／十字架方法）、`roma/`（RoMa 外參）。詳見 [CALIBRATION.md](CALIBRATION.md) |
+| `Src/calibration/` | 校正工具：校正中心 `calibration_center.py`、`calibrate.py`、`calib.py`（視窗）、校正檔讀寫；同學的木框 PnP（`calibrate_wood_frame.py`／`wood_frame.py`）、雙棒八球（`calibrate_two_rods.py`／`two_rod_calibration.py`）、手動座標（`calibrate_manual_coordinates.py`／`manual_coordinates.py`）；`chessboard_cross/`（同學的棋盤格與螢光球提取）、`roma/`（RoMa 外參）。視窗為 `calibrate_*.py`，計算與資料格式為不含 Qt 的同名模組。詳見 [CALIBRATION.md](CALIBRATION.md) |
 | `Src/cameras/` | FLIR 驅動、擷取／影片執行緒、硬體設定；YAML 位於 `config/` |
 | `Src/pose/` | 現行模型、投手追蹤、骨架推論 |
 | `Src/analysis/` | 動作分析、量測流程、分析結果讀寫 |
@@ -262,7 +262,11 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ```powershell
 python Src/UI_Control/main.py
+python Src/calibration/calibration_center.py      # 校正中心（start_calibrate.bat）
 python Src/calibration/calibrate.py
+python Src/calibration/calibrate.py --wood-frame
+python Src/calibration/calibrate.py --two-rods
+python Src/calibration/calibrate.py --manual-coordinates
 python Src/calibration/chessboard_cross/calibrate_chessboard.py
 python Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py --method both
 python Src/tools/measure_stride_pnp.py

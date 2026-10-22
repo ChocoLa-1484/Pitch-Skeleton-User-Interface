@@ -34,7 +34,7 @@ def validate_intrinsic(entry):
         raise ValueError("內參資料無效，請重新校正。")
 
 
-def match_image_pairs(folder):
+def match_image_pairs(folder, minimum=MIN_PAIRS):
     """Only pair identical filenames; never silently zip unrelated images."""
     folder = Path(folder)
     allowed = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -48,8 +48,8 @@ def match_image_pairs(folder):
     if names[0] != names[1]:
         missing = sorted(names[0] ^ names[1])
         raise ValueError("正面／側面照片缺少同名配對：" + ", ".join(missing[:8]))
-    if len(names[0]) < MIN_PAIRS:
-        raise ValueError("至少需要 {} 組同名的雙機照片。".format(MIN_PAIRS))
+    if len(names[0]) < minimum:
+        raise ValueError("至少需要 {} 組同名的雙機照片。".format(minimum))
     return sorted(names[0], key=lambda n: (0, int(Path(n).stem), n)
                   if Path(n).stem.isdigit() else (1, 0, n))
 

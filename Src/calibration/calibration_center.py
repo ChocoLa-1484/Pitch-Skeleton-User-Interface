@@ -1,8 +1,8 @@
 """校正中心：內參、外參的所有方法集中在一個視窗，點選方法、填好欄位就能執行。
 
 雙擊專案根目錄的 start_calibrate.bat 開啟（Pitcher 環境）。各方法仍呼叫原本的程式，計算結果與單獨執行相同：
-- 有自己視窗的工具（calibrate.py、calib.py、03_3d.py）另開視窗
-- 指令型工具（RoMa、棋盤格、十字架）在本視窗執行，訊息顯示在下方；RoMa 自動改用 Roma 環境執行
+- 有自己視窗的工具（calibrate.py、calib.py、03_3d.py、木框、雙棒、手動座標）另開視窗
+- 指令型工具（RoMa、棋盤格）在本視窗執行，訊息顯示在下方；RoMa 自動改用 Roma 環境執行
 """
 import os
 import shutil
@@ -23,7 +23,6 @@ from Src.paths import DB_DIR, ROOT_DIR
 
 CAL = ROOT_DIR / 'Src' / 'calibration'
 CHESSBOARD_OUT = DB_DIR / 'Calibration' / 'chessboard'
-INTRINSICS_JSON = DB_DIR / 'Calibration' / 'intrinsic' / 'intrinsics_all.json'
 
 STYLE = '''
 QMainWindow, QWidget#root { background: #f3f5f8; }
@@ -68,21 +67,18 @@ def conda_exe():
 class FolderField(QWidget):
     """一行路徑輸入＋「選擇…」按鈕"""
 
-    def __init__(self, text='', pick_file=False, start=DB_DIR):
+    def __init__(self, text='', start=DB_DIR):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.edit = QLineEdit(str(text))
         button = QPushButton('選擇…')
-        button.clicked.connect(lambda: self._pick(pick_file, start))
+        button.clicked.connect(lambda: self._pick(start))
         layout.addWidget(self.edit, 1)
         layout.addWidget(button)
 
-    def _pick(self, pick_file, start):
-        if pick_file:
-            path, _ = QFileDialog.getOpenFileName(self, '選擇檔案', str(start), 'JSON (*.json)')
-        else:
-            path = QFileDialog.getExistingDirectory(self, '選擇資料夾', str(start))
+    def _pick(self, start):
+        path = QFileDialog.getExistingDirectory(self, '選擇資料夾', str(start))
         if path:
             self.edit.setText(path)
 
@@ -118,7 +114,18 @@ class CalibrationCenter(QMainWindow):
                                 '讀取校正桿外參的標註點，以第 1、4 球實距 340 mm 換算尺度並畫出 3D 點。需先完成「校正桿手點」。',
                                 tag=('baseline', 'baseline'))
         self._add_chessboard()
-        self._add_cross()
+        self._add_window_method('木框 PnP', CAL / 'calibrate_wood_frame.py',
+                                '木框上 8 個已知座標點（正面 F1–F4、側面 S1–S4），拍約 15 組照片並標註，自動選出最好的一組。'
+                                '需先有兩台內參。結果存到 Db/Calibration/wood_frame/stereo.json，3D 分頁選「PnP」並選擇此檔。'
+                                '尚未用實體相機驗證。', tag=('classmate', '同學方法'))
+        self._add_window_method('雙棒八球 8-point', CAL / 'calibrate_two_rods.py',
+                                '兩根棒各 4 顆螢光球（球徑 50 mm、已知球距），拍或匯入 15 組以上照片，自動找球後確認球號再計算。'
+                                '需先有兩台內參。結果存到 Db/Calibration/two_rods/stereo.json，3D 分頁選「8Points」並選擇此檔。'
+                                '尚未用實體相機驗證。', tag=('classmate', '同學方法'))
+        self._add_header('其他')
+        self._add_window_method('手動座標標註', CAL / 'calibrate_manual_coordinates.py',
+                                '在正面、側面照片上標出原點、XYZ 方向與已知長度，存成 JSON。只是人工標註，不能單獨當作外參。',
+                                tag=('classmate', '同學方法'))
         self.methods.currentRowChanged.connect(self.pages.setCurrentIndex)
 
         self.log = QPlainTextEdit()
@@ -275,24 +282,6 @@ class CalibrationCenter(QMainWindow):
         layout.addStretch()
         self._add_method('棋盤格 PnP／8Points', page)
 
-    def _add_cross(self):
-        page, layout = self._page(
-            '粉紅球十字架 PnP',
-            '8 顆粉紅球十字架的照片（資料夾內含 cf、cs）。自動偵測球心並以已知球距求公制外參，結果另存到 '
-            'Db/Calibration/cross_pnp/<時間>/，不覆蓋現行校正。長焦相機需要正確的內參。', tag=('classmate', '同學方法'))
-        self.cross_images = FolderField(DB_DIR / 'Record')
-        self.cross_intrinsics = FolderField(INTRINSICS_JSON, pick_file=True, start=INTRINSICS_JSON.parent)
-        form = QFormLayout()
-        form.addRow('照片資料夾（含 cf、cs）', self.cross_images)
-        form.addRow('內參檔', self.cross_intrinsics)
-        layout.addLayout(form)
-        run = QPushButton('開始計算')
-        run.setObjectName('primary')
-        run.clicked.connect(self.run_cross)
-        layout.addWidget(run, 0, Qt.AlignLeft)
-        layout.addStretch()
-        self._add_method('粉紅球十字架 PnP', page)
-
     # ---------- 執行 ----------
     def write(self, text):
         self.log.moveCursor(self.log.textCursor().End)
@@ -324,14 +313,6 @@ class CalibrationCenter(QMainWindow):
         self.start([(py, ['-u', str(folder / 'calibrate_chessboard.py'), '--input', images, '--output', str(CHESSBOARD_OUT)]),
                     (py, ['-u', str(folder / 'calibrate_chessboard_extrinsic.py'), '--calibration', str(CHESSBOARD_OUT),
                           '--method', self.cb_method.currentData()])])
-
-    def run_cross(self):
-        images = self.cross_images.text()
-        if not (Path(images) / 'cf').is_dir() or not (Path(images) / 'cs').is_dir():
-            QMessageBox.warning(self, '十字架', '照片資料夾內要有 cf 與 cs 兩個子資料夾。')
-            return
-        self.start([(sys.executable, ['-u', str(CAL / 'chessboard_cross' / 'calibrate_cross.py'),
-                                      '--images', images, '--intrinsics', self.cross_intrinsics.text()])])
 
     def start(self, commands):
         if self.process is not None:
