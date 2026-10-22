@@ -10,13 +10,13 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from PyQt5.QtCore import QPoint, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFormLayout,
     QGraphicsItem, QGraphicsScene, QGraphicsView, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QTabWidget,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from Src.calibration.manual_coordinates import (
@@ -224,6 +224,10 @@ class AnnotationPanel(QGroupBox):
         self.image = None
         self.image_available = False
         layout = QVBoxLayout(self)
+        self.header = QWidget()
+        header_layout = QVBoxLayout(self.header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.header)
         controls = QHBoxLayout()
         self.choose_button = QPushButton("選擇圖片")
         self.choose_button.clicked.connect(self.choose_image)
@@ -240,15 +244,21 @@ class AnnotationPanel(QGroupBox):
         clear_button = QPushButton("清除標記")
         clear_button.clicked.connect(self.clear_points)
         controls.addWidget(clear_button)
-        layout.addLayout(controls)
+        header_layout.addLayout(controls)
         self.file_label = QLabel("尚未選擇影像")
         self.file_label.setWordWrap(True)
-        layout.addWidget(self.file_label)
+        self.file_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        header_layout.addWidget(self.file_label)
         self.canvas = AnnotationCanvas()
         self.canvas.clicked.connect(self.mark_point)
         layout.addWidget(self.canvas, 1)
+        self.details = QWidget()
+        layout.addWidget(self.details)
+        layout = QVBoxLayout(self.details)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.point_label = QLabel("依序在圖片點選；可切換目標修正任一點。")
         self.point_label.setWordWrap(True)
+        self.point_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         layout.addWidget(self.point_label)
         if mode == "scale":
             row = QHBoxLayout()
@@ -387,6 +397,8 @@ class ManualCoordinatesWindow(QMainWindow):
             row.addWidget(axes, 1)
             row.addWidget(scale, 1)
             self.panels[role] = {"axes": axes, "scale": scale}
+            axes.installEventFilter(self)
+            scale.installEventFilter(self)
             axes.changed.connect(self._changed)
             scale.changed.connect(self._changed)
             self.tabs.addTab(page, name)
@@ -412,6 +424,25 @@ class ManualCoordinatesWindow(QMainWindow):
         row.addWidget(self.import_button)
         row.addWidget(self.export_button)
         layout.addLayout(row)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.LayoutRequest, QEvent.Resize):
+            for panels in self.panels.values():
+                if watched not in panels.values():
+                    continue
+                # Reserve matching space above and below both images, including
+                # wrapped filenames/coordinates and the scale-only controls.
+                for name in ("header", "details"):
+                    widgets = [getattr(panel, name) for panel in panels.values()]
+                    height = max(
+                        max(widget.layout().sizeHint().height(),
+                            widget.layout().totalHeightForWidth(widget.width()))
+                        for widget in widgets)
+                    for widget in widgets:
+                        if widget.minimumHeight() != height or widget.maximumHeight() != height:
+                            widget.setFixedHeight(height)
+                break
+        return super().eventFilter(watched, event)
 
     def _changed(self, *args):
         if self._loading:
