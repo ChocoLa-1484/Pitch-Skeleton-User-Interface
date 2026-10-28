@@ -153,13 +153,13 @@ class WoodFrameTests(unittest.TestCase):
         base = cv2.Rodrigues(np.array([0., -.25, 0.]))[0]
         self.pairs, self.truth = self.make_pairs(self.target, count=15, noise=noise, base=base)
 
-    def test_fixed_geometry_preserves_new_measurements_and_asymmetry(self):
+    def test_fixed_geometry_includes_thickness_once(self):
         target = wood_frame_target()
         self.assertEqual(target["view_point_ids"], {"cf": ["F1", "F2", "F3", "F4"],
                                                     "cs": ["S1", "S2", "S3", "S4"]})
         np.testing.assert_array_equal(validate_target(target)[1],
-            [[0, 232, 0], [232, 233, 0], [232, 0, 0], [0, 0, 0],
-             [360, 232, 103], [360, 232, 335], [360, 0, 335], [360, 0, 103]])
+            [[0, 232, 0], [232, 232, 0], [232, 0, 0], [0, 0, 0],
+             [363, 232, 106], [363, 232, 338], [363, 0, 338], [363, 0, 106]])
         self.assertEqual(target["metadata"]["measurement_input_units"], "cm")
         target["points"][0]["xyz_mm"][0] = -999.
         self.assertEqual(wood_frame_target()["points"][0]["xyz_mm"][0], 0.)

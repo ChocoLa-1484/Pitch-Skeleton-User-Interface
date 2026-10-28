@@ -21,29 +21,37 @@ WORLD_CONVENTION = "X_camera = R_camera_from_world @ X_world_mm + t_camera_from_
 def wood_frame_target():
     """Latest supplied measurements (cm converted once to millimetres).
 
-    F2's measured 23.3 cm height is intentionally retained. These are nominal
-    two-face coordinates; use the geometry calibration tool when the physical
-    frame is not square. No legacy cardboard offset is added to these points.
+    Both face heights are 23.2 cm. The side's 3 mm thickness offset is already
+    included in X=363 and Z=106/338; never apply thickness a second time.
+    Use geometry calibration when the physical frame is not square.
     """
-    front = [[0., 232., 0.], [232., 233., 0.],
+    front = [[0., 232., 0.], [232., 232., 0.],
              [232., 0., 0.], [0., 0., 0.]]
-    side = [[360., 232., 103.], [360., 232., 335.],
-            [360., 0., 335.], [360., 0., 103.]]
+    side = [[363., 232., 106.], [363., 232., 338.],
+            [363., 0., 338.], [363., 0., 106.]]
     front_ids, side_ids = [f"F{i}" for i in range(1, 5)], [f"S{i}" for i in range(1, 5)]
     return {
         "schema": "wood_frame_target_v1", "units": "mm",
         "points": [{"id": name, "xyz_mm": xyz} for name, xyz in
                    zip(front_ids + side_ids, front + side)],
         "view_point_ids": {"cf": front_ids, "cs": side_ids},
+        "aruco": {
+            "dictionary": "DICT_4X4_50", "corner_basis": "marker_black_border",
+            "markers": {
+                "cf": {"id": 0, "point_ids_in_canonical_order": ["F4", "F1", "F2", "F3"]},
+                "cs": {"id": 1, "point_ids_in_canonical_order": side_ids},
+            },
+        },
         "metadata": {
             "shape": "measured_two_face_frame",
             "measurement_input_units": "cm",
             "geometry_status": "nominal_measurements_angle_not_verified",
             "origin": "The supplied wood-frame world origin; coordinates preserved without reorientation.",
             "axes": "XYZ exactly as supplied for the measured frame.",
-            "front_plane": "Z = 0 mm; F1,F2,F3,F4 in supplied physical order; F2 Y=233 mm.",
-            "side_plane": "Nominal X = 360 mm; S1,S2,S3,S4 in supplied physical order.",
-            "thickness_note": "Coordinates refer to measured marks; no additional cardboard offset is applied.",
+            "front_plane": "Z = 0 mm; F1,F2,F3,F4 in supplied physical order; top Y=232 mm.",
+            "side_plane": "Nominal X = 363 mm; S1,S2,S3,S4 in supplied physical order.",
+            "thickness_mm": 3.,
+            "thickness_note": "The 3 mm offset is included in X=363 and Z=106/338; do not apply it again.",
             "angle_note": "Nominal planes are orthogonal; calibrate their relative geometry from images if the frame is not square.",
         },
     }

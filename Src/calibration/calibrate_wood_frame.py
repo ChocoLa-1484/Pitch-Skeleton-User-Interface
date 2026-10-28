@@ -33,6 +33,7 @@ from Src.calibration.wood_frame import (
 from Src.calibration.calibrate import CaptureWorker, Job, write_image
 from Src.calibration.calibrate_manual_coordinates import AnnotationCanvas
 from Src.calibration.calibration_import import PairImportWorker, remove_staged_images
+from Src.calibration.wood_frame_aruco import detect_frame_markers, marker_config
 
 
 ROLES = ("cf", "cs")
@@ -153,7 +154,7 @@ class WoodFrameWindow(QMainWindow):
         title.setStyleSheet("font-size: 23px; font-weight: 600;")
         self.title_label = title
         layout.addWidget(title)
-        self.steps = QLabel("1 設定內參  →  2 拍攝約 15 組  →  3 標記四點  →  4 儲存最佳組")
+        self.steps = QLabel("1 設定內參  →  2 拍攝約 15 組  →  3 核對自動辨識角點  →  4 儲存最佳組")
         layout.addWidget(self.steps)
         self.instruction = QLabel()
         self.instruction.setWordWrap(True)
@@ -268,6 +269,12 @@ class WoodFrameWindow(QMainWindow):
         self.calculate_button = self.button("計算並比較所有組", self.calculate, row)
         pair_layout.addWidget(self.annotation_bar)
         self.annotation_bar.hide()
+        self.aruco_bar = QWidget()
+        aruco_actions = QHBoxLayout(self.aruco_bar)
+        self.button("重新偵測本組 ArUco", lambda: self.detect_aruco_pairs([self.index], overwrite=True), aruco_actions)
+        self.button("自動補齊全部 ArUco", lambda: self.detect_aruco_pairs(list(range(len(self.pairs)))), aruco_actions)
+        pair_layout.addWidget(self.aruco_bar)
+        self.aruco_bar.hide()
         self.pages.addWidget(pair_page)
 
         result_page = QWidget()
@@ -314,6 +321,8 @@ class WoodFrameWindow(QMainWindow):
         if (set(ids) != set(POINT_IDS["cf"] + POINT_IDS["cs"])
                 or target.get("view_point_ids") != POINT_IDS):
             raise ValueError("木框需包含 F1–F4、S1–S4，且 cf 使用 F 點、cs 使用 S 點。")
+        if "aruco" in target:
+            marker_config(target)
 
     def update_target_label(self):
         points = {p["id"]: p["xyz_mm"] for p in self.selected_target["points"]}
@@ -323,6 +332,10 @@ class WoodFrameWindow(QMainWindow):
                 "{} ({})".format(key, ",".join("{:g}".format(v) for v in points[key]))
                 for key in POINT_IDS[role]))
         lines.append("依實體編號標記，不依畫面左右重排。以這份座標為準，不額外加紙板厚度。")
+        if "aruco" in self.selected_target:
+            config = self.selected_target["aruco"]
+            lines.append("自動偵測 {}：正面 ID {}、側面 ID {}；座標為黑色外框四角。".format(
+                config["dictionary"], config["markers"]["cf"]["id"], config["markers"]["cs"]["id"]))
         self.geometry_label.setText("\n".join(lines))
 
     def choose_target(self):
@@ -520,6 +533,7 @@ class WoodFrameWindow(QMainWindow):
         self.pages.setCurrentWidget(self.pair_page)
         self.capture_bar.show()
         self.annotation_bar.hide()
+        self.aruco_bar.hide()
         self.update_progress()
 
     def update_progress(self):
@@ -616,6 +630,9 @@ class WoodFrameWindow(QMainWindow):
                 size = self.check_size(role, image)
                 pair[role] = {"points": {}, "image_size": size,
                               "path": str((self.session / role / (pair_id + ".png")).resolve())}
+                if self.session_schema == "wood_frame_session_v1" and "aruco" in self.selected_target:
+                    detection = detect_frame_markers(image, self.target_definition(), (role,))[role]
+                    pair[role].update(points=detection["points"], aruco_detection=detection)
             written = []
             try:
                 for role, image in zip(ROLES, snapshot[1:]):
@@ -632,6 +649,8 @@ class WoodFrameWindow(QMainWindow):
                 raise
             self.last_capture_time = snapshot[0]
             self.update_progress()
+            if any("aruco_detection" in pair[r] for r in ROLES):
+                self.status.setText("；".join(r.upper() + "：" + pair[r]["aruco_detection"]["note"] for r in ROLES))
         except (ValueError, OSError, cv2.error) as exc:
             self.fail(str(exc))
 
@@ -705,6 +724,72 @@ class WoodFrameWindow(QMainWindow):
 
     def on_pairs_imported(self, indices):
         """Subclass hook, called after the import is durably committed."""
+        if self.session_schema == "wood_frame_session_v1" and "aruco" in self.selected_target:
+            self.detect_aruco_pairs(indices)
+
+    def detect_aruco_pairs(self, indices, overwrite=False):
+        if self.job is not None or self.capture is not None or not indices:
+            return
+        target = self.target_definition()
+        if self.session_schema != "wood_frame_session_v1" or "aruco" not in target:
+            self.status.setText("此工作階段沒有 ArUco 對應設定，保留人工標記。")
+            return
+        pairs = copy.deepcopy(self.pairs)
+
+        def work():
+            results = {}
+            for i in indices:
+                results[i] = {}
+                for role in ROLES:
+                    if pairs[i][role]["points"] and not overwrite:
+                        continue  # Never replace a user's partial manual annotation automatically.
+                    try:
+                        results[i][role] = detect_frame_markers(read_image(pairs[i][role]["path"]), target, (role,))[role]
+                    except (ValueError, OSError, cv2.error) as exc:
+                        results[i][role] = {"points": {}, "status": "error", "note": str(exc)}
+            return results
+
+        self.pages.setEnabled(False)
+        self.reset_button.setEnabled(False)
+        self.status.setText("正在背景偵測 ArUco，依標記方向對應實體角點…")
+        self.job = Job(work, self)
+
+        def done():
+            job, self.job = self.job, None
+            self.pages.setEnabled(True)
+            self.reset_button.setEnabled(True)
+            try:
+                if job.error:
+                    raise ValueError(job.error)
+                previous = copy.deepcopy(self.pairs)
+                notes = []
+                for i, views in job.result.items():
+                    for role, detection in views.items():
+                        self.pairs[i][role]["aruco_detection"] = detection
+                        if detection["points"]:
+                            self.pairs[i][role]["points"] = detection["points"]
+                        else:
+                            notes.append("{} {}：{}".format(self.pairs[i]["id"], role.upper(), detection["note"]))
+                try:
+                    self.persist()
+                except (ValueError, OSError):
+                    self.pairs = previous
+                    raise
+                self.result = None
+                if self.phase == "annotate":
+                    self.show_pair()
+                else:
+                    self.update_progress()
+                detail = " 未完整辨識：" + "；".join(notes[:3]) if notes else ""
+                if len(notes) > 3:
+                    detail += "；另有 {} 個視角，請逐組核對。".format(len(notes) - 3)
+                self.status.setText("ArUco 偵測完成，請檢查角點疊圖。" + detail)
+            except (ValueError, OSError) as exc:
+                self.fail(str(exc))
+            finally:
+                job.deleteLater()
+        self.job.finished.connect(done)
+        self.job.start()
 
     def begin_annotation(self):
         if self.job is not None:
@@ -719,6 +804,7 @@ class WoodFrameWindow(QMainWindow):
         self.pages.setCurrentWidget(self.pair_page)
         self.capture_bar.hide()
         self.annotation_bar.show()
+        self.aruco_bar.setVisible(self.session_schema == "wood_frame_session_v1" and "aruco" in self.selected_target)
         self.index = min(self.index, len(self.pairs) - 1)
         self.show_pair()
 
@@ -757,7 +843,7 @@ class WoodFrameWindow(QMainWindow):
             len(pair["cf"]["points"]), len(pair["cs"]["points"]), completed, len(selected),
             len(self.pairs) - len(selected)))
         self.instruction.setText(
-            "依實體編號點選 F1 → F4、S1 → S4（各面：左上、右上、右下、左下；以實體標籤為準）。\n"
+            "核對自動角點 F1 → F4、S1 → S4；缺點可手動標記（以實體標籤為準，不依畫面左右重新排序）。\n"
             "左鍵標記；滾輪縮放、中鍵平移。最後固定在場地原點的照片，勾選「以本組木框位置設定場地原點／XYZ」。\n"
             "目前場地原點參考組：" + (self.world_pair_id or "未指定，將使用自動選出的最佳組木框位置"))
         self.previous_button.setEnabled(self.index > 0)

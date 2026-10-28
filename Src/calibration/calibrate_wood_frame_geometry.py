@@ -22,10 +22,11 @@ from PyQt5.QtWidgets import (
 from Src.calibration import calib_store
 from Src.calibration.calibrate import Job
 from Src.calibration.calibrate_manual_coordinates import AnnotationCanvas
-from Src.calibration.calibrate_wood_frame import load_intrinsic_choices
+from Src.calibration.calibrate_wood_frame import load_intrinsic_choices, read_image
 from Src.calibration.calibration_workflow import save_json, validate_intrinsic
 from Src.calibration.wood_frame import validate_target, wood_frame_target
 from Src.calibration.wood_frame_geometry import POINT_IDS, SESSION_SCHEMA, fit_wood_frame_geometry
+from Src.calibration.wood_frame_aruco import detect_frame_markers, marker_config
 
 
 def fit_session(document):
@@ -67,9 +68,10 @@ class WoodFrameGeometryWindow(QMainWindow):
         self.add_button("儲存標記工作階段…", self.save_session, row)
         layout.addLayout(row)
         geometry = QLabel(
-            "實體編號（不是螢幕左右）：正面 F1 左上 (0,232,0)、F2 右上 (232,233,0)、F3 右下、F4 左下。\n"
-            "側面 S1 上方靠接縫 (360,232,103)、S2 上方遠端 (360,232,335)、S3 下方遠端、S4 下方靠接縫；單位 mm。\n"
-            "滑鼠滾輪放大，中鍵拖曳；依序點八個角點，可選編號後重點修正。")
+            "實體編號（不是螢幕左右）：正面 F1 左上 (0,232,0)、F2 右上 (232,232,0)、F3 右下、F4 左下。\n"
+            "側面 S1 上方靠接縫 (363,232,106)、S2 上方遠端 (363,232,338)、S3 下方遠端、S4 下方靠接縫；單位 mm，厚度已包含。\n"
+            "DICT_4X4_50：正面 ID 0（逆時針 90°）、側面 ID 1（原方向）。匯入後自動辨識八個黑色外框角點。\n"
+            "滑鼠滾輪放大，中鍵拖曳；請核對疊圖，選編號後可手動修正。")
         geometry.setWordWrap(True)
         layout.addWidget(geometry)
         self.photo_label = QLabel("尚未匯入照片")
@@ -86,6 +88,10 @@ class WoodFrameGeometryWindow(QMainWindow):
         row.addWidget(self.point)
         self.add_button("清除此張標記", self.clear_points, row)
         self.add_button("移除此張", self.remove_photo, row)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        self.add_button("重新偵測本張 ArUco", lambda: self.detect_aruco_views([self.index], overwrite=True), row)
+        self.add_button("自動補齊全部 ArUco", lambda: self.detect_aruco_views(list(range(len(self.views)))), row)
         layout.addLayout(row)
         row = QHBoxLayout()
         self.add_button("計算木框幾何", self.calculate, row)
@@ -149,11 +155,69 @@ class WoodFrameGeometryWindow(QMainWindow):
                     raise ValueError(Path(path).name + "：影像尺寸與內參不同，不能縮放或裁切後套用。")
                 added.append({"id": path, "path": path, "image_size": size, "points": {}})
                 known.add(path)
+            first_new = len(self.views)
             self.views.extend(added)
             self.invalidate_result()
             self.show_view()
+            self.detect_aruco_views(list(range(first_new, len(self.views))))
         except (OSError, ValueError, KeyError) as exc:
             self.fail("請先確認內參及照片。\n" + str(exc))
+
+    def detect_aruco_views(self, indices, overwrite=False):
+        if self.job is not None or not indices or not self.views:
+            return
+        if "aruco" not in self.target:
+            self.summary.setPlainText("此工作階段沒有 ArUco 角點對應，保留人工標記。")
+            return
+        views, target = copy.deepcopy(self.views), copy.deepcopy(self.target)
+
+        def work():
+            results = {}
+            for i in indices:
+                try:
+                    results[i] = detect_frame_markers(read_image(views[i]["path"]), target)
+                except (ValueError, OSError) as exc:
+                    results[i] = {role: {"points": {}, "status": "error", "note": str(exc)} for role in ("cf", "cs")}
+            return results
+
+        self.centralWidget().setEnabled(False)
+        self.summary.setPlainText("正在背景偵測 ArUco，依標記編碼方向對應 F1–F4／S1–S4…")
+        self.job = Job(work, self)
+
+        def done():
+            job, self.job = self.job, None
+            self.centralWidget().setEnabled(True)
+            try:
+                if job.error:
+                    raise ValueError(job.error)
+                previous = copy.deepcopy(self.views)
+                notes = []
+                for i, detections in job.result.items():
+                    view = self.views[i]
+                    view["aruco_detection"] = detections
+                    for role, detection in detections.items():
+                        ids = target["view_point_ids"][role]
+                        if any(key in view["points"] for key in ids) and not overwrite:
+                            continue
+                        if detection["points"]:
+                            view["points"].update(detection["points"])
+                        else:
+                            notes.append("{} {}：{}".format(Path(view["path"]).name, role.upper(), detection["note"]))
+                if self.session_path is not None:
+                    try:
+                        save_json(self.session_path, self.document())
+                    except (ValueError, OSError):
+                        self.views = previous
+                        raise
+                self.invalidate_result()
+                self.show_view()
+                self.summary.setPlainText("偵測完成，請核對八點疊圖；缺少的角點可補拍或手動標記。\n" + "\n".join(notes))
+            except (ValueError, OSError) as exc:
+                self.fail(exc)
+            finally:
+                job.deleteLater()
+        self.job.finished.connect(done)
+        self.job.start()
 
     def show_view(self):
         self.canvas.clear_image()
@@ -254,6 +318,8 @@ class WoodFrameGeometryWindow(QMainWindow):
                 raise ValueError("不是木框雙面幾何工作階段。")
             validate_intrinsic(data["camera"])
             ids, _ = validate_target(data["target"])
+            if "aruco" in data["target"]:
+                marker_config(data["target"])
             if set(ids) != set(POINT_IDS) or not isinstance(data["views"], list):
                 raise ValueError("木框幾何需包含 F1–F4、S1–S4；views 必須為照片陣列。")
             names = set()

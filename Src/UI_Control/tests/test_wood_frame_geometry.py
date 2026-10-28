@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -127,6 +128,11 @@ class WoodGeometryUiTests(unittest.TestCase):
             window.intrinsics.addItem("camera")
             with patch.object(self.gui.QFileDialog, "getOpenFileNames", return_value=([str(photo)], "")):
                 window.import_photos()
+            deadline = time.monotonic() + 10
+            while window.job is not None and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertIsNone(window.job)
             window.mark_point(200., 300.)
             self.assertEqual(window.views[0]["points"], {"F1": [200., 300.]})
             session = root / "session.json"

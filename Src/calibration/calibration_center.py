@@ -116,9 +116,9 @@ class CalibrationCenter(QMainWindow):
         self._add_chessboard()
         self._add_window_method('木框幾何／夾角校正', CAL / 'calibrate_wood_frame_geometry.py',
                                 '使用一台已有內參的相機拍 12–20 張（至少 5 張），每張都須看見 F1–F4 與 S1–S4。'
-                                '估計兩面的相對位置與夾角，儲存 target JSON，再到「木框 PnP」載入。')
+                                '自動辨識正面 ArUco 0、側面 ArUco 1 的八角，核對後估計夾角、儲存 target JSON，再到「木框 PnP」載入。')
         self._add_window_method('木框 PnP', CAL / 'calibrate_wood_frame.py',
-                                '木框上 8 個已知座標點（正面 F1–F4、側面 S1–S4），拍約 15 組照片並標註，自動選出最好的一組。'
+                                '木框正面 ArUco 0、側面 ArUco 1（DICT_4X4_50），拍約 15 組照片自動辨識四角，核對後選出最好的一組。'
                                 '需先有兩台內參。結果存到 Db/Calibration/wood_frame/stereo.json，3D 分頁選「PnP」並選擇此檔。'
                                 '尚未用實體相機驗證。', tag=('classmate', '同學方法'))
         self._add_window_method('雙棒八球 8-point', CAL / 'calibrate_two_rods.py',
