@@ -28,7 +28,7 @@ from Src.calibration.calibration_workflow import (
     save_json, validate_intrinsic, validate_roles,
 )
 from Src.calibration.wood_frame import (
-    wood_frame_target, fit_wood_frame_rig, save_wood_frame_rig,
+    wood_frame_target, validate_target, fit_wood_frame_rig, save_wood_frame_rig,
 )
 from Src.calibration.calibrate import CaptureWorker, Job, write_image
 from Src.calibration.calibrate_manual_coordinates import AnnotationCanvas
@@ -102,7 +102,9 @@ class WoodFrameWindow(QMainWindow):
     session_suffix = "_wood_frame"
     minimum_pairs = 5
     maximum_pairs = 30
-    target_definition = staticmethod(wood_frame_target)
+
+    def target_definition(self):
+        return copy.deepcopy(self.selected_target)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,6 +126,9 @@ class WoodFrameWindow(QMainWindow):
         self.index = 0
         self.phase = "setup"
         self.entries = {}
+        self.selected_target = wood_frame_target()
+        self.target_source = "重新實測座標（圖上 cm 換算為 mm）"
+        self.world_pair_id = None
         self.intrinsic_source = str(Path(calib_store.INTRINSICS_JSON))
         self._build_ui()
         self.preview_timer = QTimer(self)
@@ -159,14 +164,17 @@ class WoodFrameWindow(QMainWindow):
         setup = QWidget()
         self.setup_page = setup
         form = QVBoxLayout(setup)
-        geometry = QLabel(
-            "固定木框座標（mm），紙板厚度 0.3 cm = 3 mm，已包含在座標中。\n"
-            "正面：F1 (80,320,-3) → F2 (320,320,-3) → F3 (320,80,-3) → F4 (80,80,-3)\n"
-            "側面：S1 (403,320,30) → S2 (403,320,270) → S3 (403,80,270) → S4 (403,80,30)\n"
-            "標記實體角點的編號必須固定；不可依照片上的左右位置重新排序。")
+        geometry = QLabel()
         geometry.setWordWrap(True)
         self.geometry_label = geometry
         form.addWidget(geometry)
+        if self.session_schema == "wood_frame_session_v1":
+            self.update_target_label()
+            target_actions = QHBoxLayout()
+            self.button("載入木框幾何 JSON…", self.choose_target, target_actions)
+            self.button("使用重新實測座標", self.use_measured_target, target_actions)
+            self.button("開啟木框幾何／夾角校正", self.open_geometry, target_actions)
+            form.addLayout(target_actions)
         choices = QGroupBox("使用已校正的內參")
         fields = QFormLayout(choices)
         self.intrinsic_label = QLabel()
@@ -250,6 +258,10 @@ class WoodFrameWindow(QMainWindow):
         self.include_pair.setChecked(True)
         self.include_pair.toggled.connect(self.set_pair_included)
         row.addWidget(self.include_pair)
+        self.world_reference = QCheckBox("以本組木框位置設定場地原點／XYZ")
+        self.world_reference.toggled.connect(self.set_world_reference)
+        self.world_reference.setVisible(self.session_schema == "wood_frame_session_v1")
+        row.addWidget(self.world_reference)
         self.previous_button = self.button("上一組", lambda: self.move_pair(-1), row)
         self.next_button = self.button("下一組", lambda: self.move_pair(1), row)
         self.button("返回拍攝／補拍", self.return_to_capture, row)
@@ -295,7 +307,51 @@ class WoodFrameWindow(QMainWindow):
     def set_setup(self):
         self.phase = "setup"
         self.pages.setCurrentWidget(self.setup_page)
-        self.instruction.setText("選擇正面與側面內參，再開始。木框尺寸與點位已固定，不需要輸入尺寸。")
+        self.instruction.setText("選擇正面與側面內參；木框可載入多張照片校正後的幾何 JSON。最後在場地原點固定木框拍 3 組，標記時選其中一組為場地原點／XYZ。")
+
+    def validate_wood_target(self, target):
+        ids, _ = validate_target(target)
+        if (set(ids) != set(POINT_IDS["cf"] + POINT_IDS["cs"])
+                or target.get("view_point_ids") != POINT_IDS):
+            raise ValueError("木框需包含 F1–F4、S1–S4，且 cf 使用 F 點、cs 使用 S 點。")
+
+    def update_target_label(self):
+        points = {p["id"]: p["xyz_mm"] for p in self.selected_target["points"]}
+        lines = ["木框座標（mm）：" + self.target_source]
+        for role, title in (("cf", "正面"), ("cs", "側面")):
+            lines.append(title + "：" + " → ".join(
+                "{} ({})".format(key, ",".join("{:g}".format(v) for v in points[key]))
+                for key in POINT_IDS[role]))
+        lines.append("依實體編號標記，不依畫面左右重排。以這份座標為準，不額外加紙板厚度。")
+        self.geometry_label.setText("\n".join(lines))
+
+    def choose_target(self):
+        if self.phase != "setup" or self.job is not None or self.capture is not None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "選擇木框幾何 target JSON",
+                                              str(Path(calib_store.CALIB_DIR) / "wood_frame"), "JSON (*.json)")
+        if path:
+            try:
+                target = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+                self.validate_wood_target(target)
+                self.selected_target, self.target_source = copy.deepcopy(target), str(path)
+                self.update_target_label()
+            except (ValueError, KeyError, TypeError, AttributeError, OSError) as exc:
+                self.fail("無法載入木框幾何：" + str(exc))
+
+    def use_measured_target(self):
+        if self.phase != "setup" or self.job is not None or self.capture is not None:
+            return
+        self.selected_target = wood_frame_target()
+        self.target_source = "重新實測座標（圖上 cm 換算為 mm）"
+        self.update_target_label()
+
+    def open_geometry(self):
+        from Src.calibration.calibrate_wood_frame_geometry import WoodFrameGeometryWindow
+        if not hasattr(self, "geometry_window"):
+            self.geometry_window = WoodFrameGeometryWindow()
+        self.geometry_window.show()
+        self.geometry_window.raise_()
 
     def fail(self, message):
         self.status.setText(message)
@@ -342,8 +398,14 @@ class WoodFrameWindow(QMainWindow):
             if not all(k in self.entries for k in keys) or keys[0] == keys[1]:
                 raise ValueError("請分別選擇正面、側面兩組不同內參。")
             cameras = {r: copy.deepcopy(self.entries[k]) for r, k in zip(ROLES, keys)}
-            for camera in cameras.values():
+            for role, camera in cameras.items():
                 validate_intrinsic(camera)
+                serial = self.serials[role].text().strip()
+                if serial:
+                    stored_serial = camera.get("serial_number")
+                    if stored_serial and str(stored_serial) != serial:
+                        raise ValueError("所選內參序號與 {} 拍攝相機序號不符。".format(role.upper()))
+                    camera["serial_number"] = serial
             session = Path(calib_store.CALIB_DIR) / "sessions" / (
                 datetime.now().strftime("%Y%m%d_%H%M%S_%f") + self.session_suffix)
             for role in ROLES:
@@ -351,6 +413,7 @@ class WoodFrameWindow(QMainWindow):
             self.cameras, self.session = cameras, session
             self.roles = tuple(self.serials[r].text().strip() for r in ROLES)
             self.pairs, self.result = [], None
+            self.world_pair_id = None
             self.last_capture_time = None
             self.active_target_count = self.target_count.value()
             self.active_threshold = self.threshold.value()
@@ -364,6 +427,7 @@ class WoodFrameWindow(QMainWindow):
             return
         save_json(self.session / "session.json", {
             "schema": self.session_schema, "target": self.target_definition(),
+            "target_source": self.target_source, "world_pair_id": self.world_pair_id,
             "cameras": self.cameras, "roles": list(self.roles),
             "target_count": self.active_target_count, "max_rms_px": self.active_threshold,
             "intrinsic_source": self.intrinsic_source, "pairs": self.pairs,
@@ -382,8 +446,12 @@ class WoodFrameWindow(QMainWindow):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("工作階段 JSON 必須為物件格式。")
-            if data.get("schema") != self.session_schema or data["target"] != self.target_definition():
+            if data.get("schema") != self.session_schema:
                 raise ValueError("工作階段格式或木框點位不符。")
+            if self.session_schema == "wood_frame_session_v1":
+                self.validate_wood_target(data["target"])
+            elif data["target"] != self.target_definition():
+                raise ValueError("工作階段格式或目標點位不符。")
             cameras = data["cameras"]
             for role in ROLES:
                 validate_intrinsic(cameras[role])
@@ -417,7 +485,17 @@ class WoodFrameWindow(QMainWindow):
             roles = data["roles"]
             if not isinstance(roles, list) or len(roles) != 2 or not all(isinstance(r, str) for r in roles):
                 raise ValueError("工作階段缺少相機序號欄位。")
+            world_pair_id = data.get("world_pair_id")
+            if (world_pair_id is not None
+                    and (not isinstance(world_pair_id, str) or not any(
+                        p["id"] == world_pair_id and not p.get("excluded", False) for p in pairs))):
+                raise ValueError("場地原點參考組必須存在且不能略過。")
             self.session, self.pairs, self.cameras = Path(path).parent, pairs, cameras
+            if self.session_schema == "wood_frame_session_v1":
+                self.selected_target = copy.deepcopy(data["target"])
+                self.target_source = data.get("target_source", "工作階段保存的木框幾何")
+                self.update_target_label()
+            self.world_pair_id = world_pair_id
             self.roles = tuple(roles)
             self.active_target_count, self.active_threshold = target_count, threshold
             self.intrinsic_source = data.get("intrinsic_source", "")
@@ -670,14 +748,18 @@ class WoodFrameWindow(QMainWindow):
         self.include_pair.blockSignals(True)
         self.include_pair.setChecked(not pair.get("excluded", False))
         self.include_pair.blockSignals(False)
+        self.world_reference.blockSignals(True)
+        self.world_reference.setChecked(pair["id"] == self.world_pair_id)
+        self.world_reference.setEnabled(not pair.get("excluded", False))
+        self.world_reference.blockSignals(False)
         self.pair_label.setText("第 {}/{} 組 · {}｜正面 {}/4、側面 {}/4｜完成 {}/{} 組，略過 {} 組".format(
             self.index + 1, len(self.pairs), pair.get("original_name", pair["id"]),
             len(pair["cf"]["points"]), len(pair["cs"]["points"]), completed, len(selected),
             len(self.pairs) - len(selected)))
         self.instruction.setText(
-            "依實體編號點選：F1 (80,320,-3) → F2 (320,320,-3) → F3 (320,80,-3) → F4 (80,80,-3)；"
-            "S1 (403,320,30) → S2 (403,320,270) → S3 (403,80,270) → S4 (403,80,30)。\n"
-            "左鍵標記；選擇點名可重標；滾輪縮放、中鍵拖曳平移。點位自動保存。")
+            "依實體編號點選 F1 → F4、S1 → S4（各面：左上、右上、右下、左下；以實體標籤為準）。\n"
+            "左鍵標記；滾輪縮放、中鍵平移。最後固定在場地原點的照片，勾選「以本組木框位置設定場地原點／XYZ」。\n"
+            "目前場地原點參考組：" + (self.world_pair_id or "未指定，將使用自動選出的最佳組木框位置"))
         self.previous_button.setEnabled(self.index > 0)
         self.next_button.setEnabled(self.index < len(self.pairs) - 1)
         self.calculate_button.setEnabled(completed == len(selected) and completed >= self.minimum_pairs)
@@ -687,13 +769,33 @@ class WoodFrameWindow(QMainWindow):
             return
         pair = self.pairs[self.index]
         previous = pair.get("excluded", False)
+        previous_world = self.world_pair_id
         pair["excluded"] = not included
+        if not included and self.world_pair_id == pair["id"]:
+            self.world_pair_id = None
         try:
             self.persist()
             self.result = None
         except OSError as exc:
             pair["excluded"] = previous
+            self.world_pair_id = previous_world
             self.fail("略過設定未保存：" + str(exc))
+        self.update_annotation_status()
+
+    def set_world_reference(self, checked):
+        if self.phase != "annotate" or self.job is not None:
+            return
+        pair = self.pairs[self.index]
+        if checked and pair.get("excluded", False):
+            return
+        previous = self.world_pair_id
+        self.world_pair_id = pair["id"] if checked else None
+        try:
+            self.persist()
+            self.result = None
+        except OSError as exc:
+            self.world_pair_id = previous
+            self.fail("場地原點選擇未保存：" + str(exc))
         self.update_annotation_status()
 
     def mark_point(self, role, x, y):
@@ -755,12 +857,14 @@ class WoodFrameWindow(QMainWindow):
             self.fail("至少需要 5 組，且每組必須完成正面及側面各 4 點；建議拍攝 15 組。")
             return
         cameras, pairs = copy.deepcopy(self.cameras), copy.deepcopy(selected)
+        target, world_pair_id = self.target_definition(), self.world_pair_id
         threshold = self.active_threshold
         self.pages.setEnabled(False)
         self.reset_button.setEnabled(False)
         self.status.setText("正在解算各組 PnP，檢查平面解與雙機一致性…")
-        self.job = Job(lambda: fit_wood_frame_rig(cameras, self.target_definition(), pairs,
-                                                 min_pairs=5, max_rms_px=threshold), self)
+        self.job = Job(lambda: fit_wood_frame_rig(cameras, target, pairs,
+                                                 min_pairs=5, max_rms_px=threshold,
+                                                 world_pair_id=world_pair_id), self)
         self.job.finished.connect(self.calculation_finished)
         self.job.start()
 
@@ -813,7 +917,9 @@ class WoodFrameWindow(QMainWindow):
             for col, item in enumerate(items):
                 self.result_table.setItem(row, col, QTableWidgetItem(item))
         notes = ["依其他照片的雙機幾何一致性與本組重投影誤差選出一組；所有評分隨外參一起保存。",
-                 "世界座標依最佳照片中木框的實際位置與方向。更換木框姿態不影響雙機相對外參。",
+                 "世界座標參考組：{}。原點與 XYZ 依該組木框的實際位置與方向；雙機相對外參仍由多組檢查。".format(
+                     self.result.get("world_reference_pair_id", self.result["best_pair_id"])),
+                 "世界座標轉換矩陣已存入 JSON；主程式目前的 3D 顯示仍使用側面相機座標。",
                  "誤差為照片檢查結果，請再以現場已知距離確認實際量測精度。"]
         notes.extend(self.result.get("warnings", []))
         self.result_text.setPlainText("\n".join(notes))
@@ -853,6 +959,7 @@ class WoodFrameWindow(QMainWindow):
             self.stop_capture(self.reset)
             return
         self.session, self.result = None, None
+        self.world_pair_id = None
         self.pairs = []
         self.index = 0
         self.set_setup()

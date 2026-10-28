@@ -107,6 +107,9 @@ class WoodFrameUiTests(unittest.TestCase):
         self.assertFalse(self.window.calculate_button.isEnabled())
         self.window.include_pair.setChecked(False)
         self.assertTrue(self.window.calculate_button.isEnabled())
+        self.window.index = 2
+        self.window.show_pair()
+        self.window.world_reference.setChecked(True)
         self.window.calculate()
         deadline = time.monotonic() + 30
         while self.window.job is not None and time.monotonic() < deadline:
@@ -115,6 +118,7 @@ class WoodFrameUiTests(unittest.TestCase):
         self.assertIsNone(self.window.job)
         self.assertEqual(self.window.phase, "result", self.window.fail.call_args)
         self.assertEqual(self.window.result["manually_excluded_pairs"], ["5"])
+        self.assertEqual(self.window.result["world_reference_pair_id"], "2")
         self.assertEqual(self.window.result_table.rowCount(), 5)
         path = self.root / "export" / "木框.json"
         with patch.object(gui.QFileDialog, "getSaveFileName", return_value=(str(path), "")), \
@@ -128,12 +132,52 @@ class WoodFrameUiTests(unittest.TestCase):
             self.window.resume_session()
         self.assertEqual(self.window.phase, "annotate")
         self.assertEqual(self.window.pairs, expected)
+        self.assertEqual(self.window.world_pair_id, "2")
         self.window.index = 0
         self.window.show_pair()
         old_points = copy.deepcopy(self.window.pairs[0]["cf"]["points"])
         with patch.object(self.window, "persist", side_effect=OSError("full")):
             self.window.mark_point("cf", 200, 300)
         self.assertEqual(self.window.pairs[0]["cf"]["points"], old_points)
+
+    def test_custom_geometry_is_saved_and_restored_without_replacing_it_with_defaults(self):
+        self.window.reset()
+        target = wood_frame_target()
+        target["points"][4]["xyz_mm"][0] += 2.
+        path = self.root / "measured_target.json"
+        path.write_text(json.dumps(target), encoding="utf-8")
+        with patch.object(gui.QFileDialog, "getOpenFileName", return_value=(str(path), "")):
+            self.window.choose_target()
+        self.assertEqual(self.window.target_definition(), target)
+        self.window.start_session()
+        session = self.window.session / "session.json"
+        self.window.reset()
+        self.window.use_measured_target()
+        self.assertNotEqual(self.window.target_definition(), target)
+        self.assertTrue(self.window.resume_session(str(session)))
+        self.assertEqual(self.window.target_definition(), target)
+        self.assertEqual(self.window.target_source, str(path))
+        self.window.reset()
+        target["view_point_ids"]["cf"] = target["view_point_ids"]["cs"]
+        path.write_text(json.dumps(target), encoding="utf-8")
+        before = self.window.target_definition()
+        with patch.object(gui.QFileDialog, "getOpenFileName", return_value=(str(path), "")):
+            self.window.choose_target()
+        self.assertEqual(self.window.target_definition(), before)
+        self.window.fail.assert_called()
+
+    def test_world_reference_save_failure_and_exclusion(self):
+        self.fill_pairs()
+        self.window.begin_annotation()
+        with patch.object(self.window, "persist", side_effect=OSError("disk full")):
+            self.window.world_reference.setChecked(True)
+        self.assertIsNone(self.window.world_pair_id)
+        self.assertFalse(self.window.world_reference.isChecked())
+        self.window.world_reference.setChecked(True)
+        self.assertEqual(self.window.world_pair_id, "0")
+        self.window.include_pair.setChecked(False)
+        self.assertIsNone(self.window.world_pair_id)
+        self.assertFalse(self.window.world_reference.isEnabled())
 
     def test_bad_session_and_intrinsic_formats_leave_current_work_unchanged(self):
         self.fill_pairs()

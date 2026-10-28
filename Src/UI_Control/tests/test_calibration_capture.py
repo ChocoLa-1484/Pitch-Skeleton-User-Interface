@@ -36,9 +36,9 @@ class CalibrationCaptureTests(unittest.TestCase):
         return window
 
     def test_capture_accepts_2d_and_3d_corners_and_rejects_duplicates(self):
-        points = np.mgrid[0:8, 0:11].T.reshape(-1, 2).astype(np.float32) * 10
-        for first_shape in ((88, 2), (88, 1, 2)):
-            for next_shape in ((88, 2), (88, 1, 2)):
+        points = np.mgrid[0:8, 0:7].T.reshape(-1, 2).astype(np.float32) * 10
+        for first_shape in ((56, 2), (56, 1, 2)):
+            for next_shape in ((56, 2), (56, 1, 2)):
                 with self.subTest(first=first_shape, next=next_shape):
                     window = self.collector()
                     samples = [points.reshape(first_shape),
@@ -53,16 +53,16 @@ class CalibrationCaptureTests(unittest.TestCase):
                         window.capture_sample()
                     self.assertEqual(window.captured_count, 2)
                     self.assertEqual(len(window.objpoints), 2)
-                    self.assertEqual(window.imgpoints[-1].shape, (88, 1, 2))
+                    self.assertEqual(window.imgpoints[-1].shape, (56, 1, 2))
                     np.testing.assert_array_equal(window.imgpoints[-1].reshape(-1, 2), points + [6, 8])
 
     def test_capture_rejects_changed_board_size_without_corrupting_samples(self):
         window = self.collector()
-        window.imgpoints = [np.zeros((88, 2), dtype=np.float32)]
-        window.objpoints = [np.zeros((88, 3), dtype=np.float32)]
+        window.imgpoints = [np.zeros((56, 2), dtype=np.float32)]
+        window.objpoints = [np.zeros((56, 3), dtype=np.float32)]
         window.captured_count = 1
         window.spn_cols.setValue(7)
-        corners = np.zeros((77, 1, 2), dtype=np.float32)
+        corners = np.zeros((49, 1, 2), dtype=np.float32)
         with patch.object(self.calib.cv2, "findChessboardCorners", return_value=(True, corners)), \
              patch.object(self.calib.cv2, "cornerSubPix", return_value=corners):
             window.capture_sample()

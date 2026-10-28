@@ -42,6 +42,7 @@ from PyQt5.QtGui import QImage, QPixmap
 import PySpin
 from Src.cameras.single_camera.flir_camera_system import FlirCameraSystem
 from Src.calibration import calib_store
+from Src.calibration.board_defaults import DEFAULT_PATTERN, DEFAULT_SQUARE_MM
 
 from Src.paths import CAMERA_CONFIG_DIR
 CONFIG_PATH = str(CAMERA_CONFIG_DIR / "GH3_camera_config.yaml")
@@ -131,14 +132,14 @@ class CalibWindow(QMainWindow):
         board_layout = QHBoxLayout(board_group)
         self.spn_cols = QSpinBox()
         self.spn_cols.setRange(3, 30)
-        self.spn_cols.setValue(8)
+        self.spn_cols.setValue(DEFAULT_PATTERN[0])
         self.spn_rows = QSpinBox()
         self.spn_rows.setRange(3, 30)
-        self.spn_rows.setValue(11)
+        self.spn_rows.setValue(DEFAULT_PATTERN[1])
         self.spn_square = QDoubleSpinBox()
         self.spn_square.setRange(0.1, 1000.0)
         self.spn_square.setDecimals(2)
-        self.spn_square.setValue(10.0)
+        self.spn_square.setValue(DEFAULT_SQUARE_MM)
         self.spn_square.setSuffix(" mm")
         board_layout.addWidget(QLabel("內角點 寬:"))
         board_layout.addWidget(self.spn_cols)

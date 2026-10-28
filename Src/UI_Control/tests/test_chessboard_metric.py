@@ -61,7 +61,7 @@ class MetricGeometryTests(unittest.TestCase):
                    "distortion_coefficients": [-.04, .005, -.002, .001, 0.], "image_size": [1920, 1084]}}
         self.R = cv2.Rodrigues(np.array([.04, -.19, .02]))[0]
         self.t = np.array([1100., 40., 200.])
-        self.obj = object_points()
+        self.obj = object_points((7, 7), 100.)  # Historical square-board fixture.
         self.pairs = []
         rng = np.random.default_rng(34)
         for i in range(12):

@@ -36,6 +36,8 @@ from Src.UI_Control.viewers.triangulate_3d_viewer import Triangulate3DViewer
 import time
 from Src.analysis.keyframe_export import SimpleKeyframeLogger
 from Src.calibration import calib_store
+from Src.cameras.pitch_profiles import (calibration_path, load_profile_legacy,
+    read_recording_context, recording_calibration, get_profile)
 from Src.analysis.analysis_io import atomic_json, read_optional_json
 from Src.analysis.pose_replay import pose_timeline, pose_input_signature, remap_pose_rows
 from Src.calibration.chessboard_cross.chessboard_metric import DEFAULT_CALIBRATION
@@ -165,6 +167,7 @@ class PoseVideoTabControl(QWidget):
         self.setupCalibrationControls()
 
     def setupCalibrationControls(self):
+        self.pitch_hand = 'right'
         self.calibration_combo = QComboBox()
         for label, method in [('PnP 雙機校正', 'pnp'), ('8Points 雙機尺度', '8point'), ('舊版比例（無公制校正）', 'legacy')]:
             self.calibration_combo.addItem(label, method)
@@ -203,7 +206,7 @@ class PoseVideoTabControl(QWidget):
         apply.clicked.connect(lambda: self._apply_selected_calibration(resume=True))
         self.offset_spin.valueChanged.connect(self._invalidate_calibration)
         self.reference_spin.valueChanged.connect(self._invalidate_calibration)
-        self.heel_combo.currentIndexChanged.connect(self._invalidate_calibration)
+        self.heel_combo.currentIndexChanged.connect(self._pitch_hand_changed)
         self.calibration_path.textEdited.connect(self._invalidate_calibration)
         events = QGroupBox('手動修正關鍵幀')
         event_layout = QVBoxLayout(events)
@@ -233,9 +236,28 @@ class PoseVideoTabControl(QWidget):
     def _calibration_method_changed(self):
         method = self.calibration_combo.currentData()
         if method != 'legacy':
-            self.calibration_path.setText(str(DEFAULT_CALIBRATION / method / 'stereo.json'))
+            folder = self.video_loader.folder_path
+            saved = recording_calibration(folder, method) if folder else None
+            self.calibration_path.setText(str(saved or calibration_path(self.pitch_hand, method)))
         self.calibration_path.setEnabled(method != 'legacy')
         self._invalidate_calibration()
+
+    def _pitch_hand_changed(self):
+        hand = 'right' if self.heel_combo.currentData() == 25 else 'left'
+        handler = getattr(self, 'pitch_hand_handler', None)
+        if handler is None or handler(hand):
+            self.set_pitch_hand(hand)
+
+    def set_pitch_hand(self, hand, force=False):
+        self.heel_combo.blockSignals(True)
+        self.heel_combo.setCurrentIndex(self.heel_combo.findData(25 if hand == 'right' else 24))
+        self.heel_combo.blockSignals(False)
+        if hand == self.pitch_hand and not force:
+            return
+        self.pitch_hand = hand
+        for estimator in (self.pose_estimater, self.pose_estimater_2):
+            estimator.setPitchHandId(10 if hand == 'right' else 9)
+        self._calibration_method_changed()
 
     def _browse_calibration(self):
         path, _ = QFileDialog.getOpenFileName(self, '選擇棋盤 stereo.json', self.calibration_path.text(), 'JSON (*.json)')
@@ -308,6 +330,12 @@ class PoseVideoTabControl(QWidget):
             description = '舊版估算：固定倍率，距離與速度不具校正精度。'
         else:
             rig = load_rig(self.calibration_path.text())
+            context = read_recording_context(loader.folder_path)
+            if context:
+                for role, key in (('cf', 'front'), ('cs', 'side')):
+                    serial = rig['intrinsics'][role].get('serial_number')
+                    if serial and str(serial) != str(context.get(key)):
+                        raise ValueError('所選校正檔與錄影當時的相機序號不符。')
             if rig['method'] != method:
                 raise ValueError('所選方法與 stereo.json 的 method 不一致。')
             names = [Path(str(n)).name[:2].lower() for n in (loader.video_name, loader.video_name_2)]
@@ -927,8 +955,19 @@ class PoseVideoTabControl(QWidget):
             self.K_F, self.K_S, self.F = snapshot["K_F"], snapshot["K_S"], snapshot["F"]
             print(f"[3D] 使用錄影時的校正快照：正面 SN{snapshot['front']}、側面 SN{snapshot['side']}")
         else:
-            self.K_F, self.K_S, self.F = self.default_calibration
-            print("[3D] 此錄影沒有校正快照，使用程式內建的舊設備參數")
+            context = read_recording_context(folder_path) if folder_path else None
+            if context:
+                raise ValueError('此錄影沒有 F 矩陣快照；請選用錄影時保存的 PnP／8Points 校正，或明確選擇相符的外參檔。')
+            profile = get_profile(self.pitch_hand)
+            calibrated = load_profile_legacy(self.pitch_hand) if profile else None
+            if calibrated is not None:
+                self.K_F, self.K_S, self.F = calibrated['K_F'], calibrated['K_S'], calibrated['F']
+                print(f"[3D] 使用 {self.pitch_hand} 設定的 F 矩陣與相機內參")
+            elif self.pitch_hand == 'left' or profile is not None:
+                raise ValueError('此手別尚無 F 矩陣校正；請設定左右投外參或改用 PnP／8Points。')
+            else:
+                self.K_F, self.K_S, self.F = self.default_calibration
+                print("[3D] 此錄影沒有校正快照，使用程式內建的舊設備參數")
         # PoseAnalyzer 內的 3D 計算在每次三角化時才讀取 K、F，直接更新即可
         for analyzer in (self.pose_analyzer, self.pose_analyzer_2):
             analyzer.viewer3D.K_L, analyzer.viewer3D.K_R, analyzer.viewer3D.F = self.K_S, self.K_F, self.F
@@ -980,6 +1019,20 @@ class PoseVideoTabControl(QWidget):
 
     def updateVideoInfo(self):
         """更新與影片相關的資訊顯示在 UI 上。"""
+        context = read_recording_context(self.video_loader.folder_path)
+        if context:
+            handler = getattr(self, 'pitch_hand_handler', None)
+            if handler is not None and not handler(context['pitch_hand']):
+                self.calibration_status.setText('請先停止錄影再載入不同手別的影片。')
+                return
+            self.set_pitch_hand(context['pitch_hand'])
+            method = self.calibration_combo.currentData()
+            if method == 'legacy' and method not in context.get('calibrations', {}):
+                method = next((m for m in ('pnp', '8point') if m in context.get('calibrations', {})), method)
+                self.calibration_combo.setCurrentIndex(self.calibration_combo.findData(method))
+            saved = recording_calibration(self.video_loader.folder_path, method)
+            if saved and method != 'legacy':
+                self.calibration_path.setText(str(saved))
         self.reset()
         self._calibration_ready = False
         self.frame_offset = self.offset_spin.value()

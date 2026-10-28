@@ -32,6 +32,7 @@ from Src.pose.model import Model
 from Src.analysis.PitchingAnalyzer import PitchingAnalyzer
 from Src.cameras.video_threads import FramesToVideoWriterThread
 from Src.calibration import calib_store
+from Src.cameras.pitch_profiles import save_recording_context, read_recording_context
 from Src.analysis.analysis_io import atomic_json, read_optional_json
 from Src.analysis.pose_replay import pose_timeline, remap_pose_rows, saved_pose_offset, save_pose_timeline
 from Src.rapsodo.capture_tablet_images import TabletImageCaptureThread
@@ -665,8 +666,14 @@ class PosePitchTabControl(QWidget):
     def changePitcher(self):
         """Change the pitcher based on input value. 9: "左腕", 10: "右腕","""
         kpt_id = 10 if self.ui.pitchInput.isChecked() else 9
+        hand = "right" if kpt_id == 10 else "left"
+        handler = getattr(self, "pitch_hand_handler", None)
+        if handler is not None and not handler(hand):
+            return
+        self.camera.pitch_hand = hand
         self.pose_estimater_2.setKptId(kpt_id)
-        self.pose_estimater_2.setPitchHandId(kpt_id)
+        for estimator in (self.pose_estimater, self.pose_estimater_2):
+            estimator.setPitchHandId(kpt_id)
         # 重置投球計數
         self.pitchCount = 0
         self.ui.PitchCountLabel.setText(f"{self.pitchCount}")
@@ -688,7 +695,12 @@ class PosePitchTabControl(QWidget):
             self.ui.skeletonVideoCheckBox.setCheckState(0)
             self.ui.selectKptCheckBox.setCheckState(0)
             self.is_video = False
-            frame_width, frame_height, fps = self.camera.toggleCamera(True)
+            try:
+                frame_width, frame_height, fps = self.camera.toggleCamera(True)
+            except Exception as exc:
+                self.ui.cameraCheckBox.setChecked(False)
+                QMessageBox.warning(self, "無法開啟相機", str(exc))
+                return
             self.camera_fps = fps if fps else 60
             self.model.setImageSize((frame_width, frame_height))
             self._set_resolution_text(f"(0, 0) - ({frame_width} x {frame_height}), FPS: {fps}")
@@ -748,7 +760,9 @@ class PosePitchTabControl(QWidget):
         front_sn = getattr(thread, 'serial_front', None)
         side_sn = getattr(thread, 'serial_side', None)
         try:
-            ok, msg = calib_store.save_snapshot(self.output_dir, front_sn, side_sn)
+            context = save_recording_context(self.output_dir, self.camera.pitch_hand, front_sn, side_sn)
+            ok = bool(context["calibrations"])
+            msg = "；".join(context["warnings"]) or "已儲存左右投相機資訊與可用的校正快照"
         except Exception as e:
             ok, msg = False, str(e)
         print(f"[Calibration] {msg}" if ok else f"[Calibration] 未存校正快照：{msg}")
@@ -2075,6 +2089,18 @@ class PosePitchTabControl(QWidget):
 
     def updateVideoInfo(self):
         """更新與影片相關的資訊顯示在 UI 上。"""
+        context = read_recording_context(self.video_loader.folder_path)
+        if context:
+            hand = context['pitch_hand']
+            handler = getattr(self, 'pitch_hand_handler', None)
+            if handler is not None and not handler(hand):
+                return
+            for button, checked in ((self.ui.pitchInput, hand == 'right'),
+                                    (self.ui.pitchInput_L, hand == 'left')):
+                button.blockSignals(True)
+                button.setChecked(checked)
+                button.blockSignals(False)
+            self.changePitcher()
         # 重置分析器和UI显示（video_loader已在play_video_from_item中清理过）
         self.reset()
         video_fps = self.video_loader.video_fps if self.video_loader.video_fps else 60

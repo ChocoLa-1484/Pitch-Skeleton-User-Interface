@@ -50,7 +50,7 @@ def detect_connected_serials():
     return serials
 
 
-def resolve_camera_serials(sn1=None, sn2=None):
+def resolve_camera_serials(sn1=None, sn2=None, pitch_hand=None):
     """決定要使用的兩台相機序號。
 
     優先順序：明確指定 > Db/Calibration/camera_roles.json（calib.py 第 4 區設定）
@@ -59,6 +59,12 @@ def resolve_camera_serials(sn1=None, sn2=None):
     """
     if sn1 and sn2:
         return sn1, sn2
+
+    if pitch_hand is not None:
+        from Src.cameras.pitch_profiles import profile_serials
+        serials = profile_serials(pitch_hand)
+        if serials:
+            return serials
 
     # 校正時指定的角色
     try:
@@ -149,13 +155,13 @@ from Src.cameras import FlirCameraSystem,DualFlirSystem
 class VideoCaptureThread(QThread):
     frame_ready = pyqtSignal(np.ndarray,np.ndarray)
 
-    def __init__(self, parent=None, sn1=None, sn2=None):
+    def __init__(self, parent=None, sn1=None, sn2=None, pitch_hand=None):
         super().__init__(parent)
         CONFIG = str(CAMERA_CONFIG_DIR / "GH3_camera_config.yaml")
         CONFIG_2 = str(CAMERA_CONFIG_DIR / "GH3_camera_config_2.yaml")
 
         # 序號不再寫死：可由呼叫端指定、camera_serials.json 設定、或自動偵測
-        SN1, SN2 = resolve_camera_serials(sn1, sn2)
+        SN1, SN2 = resolve_camera_serials(sn1, sn2, pitch_hand)
         self.serial_front = SN1
         self.serial_side = SN2
 
@@ -168,8 +174,14 @@ class VideoCaptureThread(QThread):
         print(f"[VideoCaptureThread] front={SN1}  side={SN2}")
 
         self.camera1 = FlirCameraSystem(CONFIG,SN1)
-        self.camera2 = FlirCameraSystem(CONFIG_2,SN2)
-        self.cameras = DualFlirSystem(self.camera1, self.camera2)
+        try:
+            self.camera2 = FlirCameraSystem(CONFIG_2,SN2)
+            self.cameras = DualFlirSystem(self.camera1, self.camera2)
+        except Exception:
+            self.camera1.release()
+            if hasattr(self, 'camera2'):
+                self.camera2.release()
+            raise
         # if not self.camera1.isOpened() or not self.camera2.isOpened():
         #     raise ValueError(f"Cannot open one or both camera.")
         self.running = False

@@ -19,16 +19,16 @@ WORLD_CONVENTION = "X_camera = R_camera_from_world @ X_world_mm + t_camera_from_
 
 
 def wood_frame_target():
-    """The measured two-face frame; coordinates are fixed in millimetres.
+    """Latest supplied measurements (cm converted once to millimetres).
 
-    Front and side marks are different physical points on perpendicular faces.
-    Both camera poses nevertheless refer to this SAME world coordinate system.
-    The 0.3 cm cardboard offset is already included in Z=-3 and X=403.
+    F2's measured 23.3 cm height is intentionally retained. These are nominal
+    two-face coordinates; use the geometry calibration tool when the physical
+    frame is not square. No legacy cardboard offset is added to these points.
     """
-    front = [[80., 320., -3.], [320., 320., -3.],
-             [320., 80., -3.], [80., 80., -3.]]
-    side = [[403., 320., 30.], [403., 320., 270.],
-            [403., 80., 270.], [403., 80., 30.]]
+    front = [[0., 232., 0.], [232., 233., 0.],
+             [232., 0., 0.], [0., 0., 0.]]
+    side = [[360., 232., 103.], [360., 232., 335.],
+            [360., 0., 335.], [360., 0., 103.]]
     front_ids, side_ids = [f"F{i}" for i in range(1, 5)], [f"S{i}" for i in range(1, 5)]
     return {
         "schema": "wood_frame_target_v1", "units": "mm",
@@ -36,14 +36,15 @@ def wood_frame_target():
                    zip(front_ids + side_ids, front + side)],
         "view_point_ids": {"cf": front_ids, "cs": side_ids},
         "metadata": {
-            "shape": "perpendicular_two_face_frame",
-            "cardboard_thickness_mm": 3.,
-            "cardboard_thickness_input": {"value": .3, "units": "cm"},
+            "shape": "measured_two_face_frame",
+            "measurement_input_units": "cm",
+            "geometry_status": "nominal_measurements_angle_not_verified",
             "origin": "The supplied wood-frame world origin; coordinates preserved without reorientation.",
             "axes": "XYZ exactly as supplied for the measured frame.",
-            "front_plane": "Z = -3 mm; F1,F2,F3,F4 in supplied physical order.",
-            "side_plane": "X = 403 mm; S1,S2,S3,S4 in supplied physical order.",
-            "thickness_note": "The 3 mm offset is already included in all point coordinates; do not apply it again.",
+            "front_plane": "Z = 0 mm; F1,F2,F3,F4 in supplied physical order; F2 Y=233 mm.",
+            "side_plane": "Nominal X = 360 mm; S1,S2,S3,S4 in supplied physical order.",
+            "thickness_note": "Coordinates refer to measured marks; no additional cardboard offset is applied.",
+            "angle_note": "Nominal planes are orthogonal; calibrate their relative geometry from images if the frame is not square.",
         },
     }
 
@@ -155,7 +156,7 @@ def _poses(xyz, pixels, camera):
     seeds = []
     if planar:
         # IPPE is best conditioned on a centered Z=0 plane. Explicitly convert
-        # arbitrary faces (including Z=-3 and X=403) then restore the SAME world
+        # arbitrary faces then restore the SAME world
         # coordinates. Never let each camera's local plane become its world.
         basis = basis_rows.T
         if np.linalg.det(basis) < 0:
@@ -228,7 +229,7 @@ def _world_pose(pose):
             "min_depth_mm": pose["min_depth_mm"]}
 
 
-def fit_wood_frame_rig(cameras, target, pairs, *, min_pairs=3, max_rms_px=3.):
+def fit_wood_frame_rig(cameras, target, pairs, *, min_pairs=3, max_rms_px=3., world_pair_id=None):
     """Choose ONE synchronized pair using all paired observations as checks.
 
     ``cameras`` has cf/cs intrinsic_matrix, distortion_coefficients, image_size.
@@ -241,6 +242,8 @@ def fit_wood_frame_rig(cameras, target, pairs, *, min_pairs=3, max_rms_px=3.):
 
     Cross-validation means other frame poses check the candidate stereo rig.
     It is selection data, not an independent accuracy certification.
+    ``world_pair_id`` optionally anchors world axes to a specified accepted
+    stationary frame pose without changing the selected camera-to-camera rig.
     """
     if not isinstance(min_pairs, int) or min_pairs < 3:
         raise ValueError("至少需要 3 組同步照片；建議拍攝約 15 組不同位置與角度。")
@@ -350,17 +353,64 @@ def fit_wood_frame_rig(cameras, target, pairs, *, min_pairs=3, max_rms_px=3.):
         warnings.append("木框姿態變化小於 8°；請增加傾斜角度，降低平面 PnP 雙解的不確定性。")
     if best["held_rms_px"] > max_rms_px:
         warnings.append("其他照片的中位跨相機重投影誤差偏高，建議重新檢查點位與內參。")
+    world_pair_id = best["pair"]["id"] if world_pair_id is None else world_pair_id
+    world_poses = {role: best[role] for role in ("cf", "cs")}
+    if world_pair_id != best["pair"]["id"]:
+        from scipy.optimize import least_squares
+        reference = next((p for p in prepared if p["id"] == world_pair_id), None)
+        if reference is None or reference["diagnostic"]["status"] == "rejected":
+            raise ValueError("指定的世界座標照片組不存在或未通過雙機一致性檢查。")
+        rig_R, rig_t = best["R"], best["t"]
+
+        def reference_poses(parameters):
+            Rcf, tcf = cv2.Rodrigues(parameters[:3])[0], parameters[3:]
+            return {"cf": (Rcf, tcf), "cs": (rig_R @ Rcf, rig_R @ tcf + rig_t)}
+
+        def reference_residual(parameters):
+            return np.concatenate([(_project(xyz_by_role[role], R, t, camera_arrays[role])
+                                     - reference["pixels"][role]).ravel()
+                                   for role, (R, t) in reference_poses(parameters).items()])
+
+        seeds = [(p["R"], p["t"]) for p in reference["poses"]["cf"]]
+        seeds.extend((rig_R.T @ p["R"], rig_R.T @ (p["t"] - rig_t))
+                     for p in reference["poses"]["cs"])
+        solutions = []
+        for R, t in seeds:
+            fit = least_squares(reference_residual, np.r_[cv2.Rodrigues(R)[0].ravel(), t],
+                                x_scale="jac", max_nfev=200)
+            if not fit.success or not np.isfinite(fit.x).all():
+                continue
+            poses = {}
+            for role, (R, t) in reference_poses(fit.x).items():
+                depth = (xyz_by_role[role] @ R.T + t)[:, 2]
+                rms = _rms(reference["pixels"][role], _project(xyz_by_role[role], R, t, camera_arrays[role]))
+                if np.min(depth) <= 0 or rms > max_rms_px:
+                    break
+                poses[role] = {"R": R, "t": t, "rms_px": rms, "min_depth_mm": float(np.min(depth))}
+            if len(poses) == 2:
+                score = float(np.sqrt(np.mean([p["rms_px"] ** 2 for p in poses.values()])))
+                solutions.append((score, poses))
+        if not solutions:
+            raise ValueError("指定世界座標照片無法符合固定雙機外參，請修正點位或換一組。")
+        solutions.sort(key=lambda item: item[0])
+        score, world_poses = solutions[0]
+        for other_score, alternative in solutions[1:]:
+            angle = np.linalg.norm(cv2.Rodrigues(alternative["cf"]["R"] @ world_poses["cf"]["R"].T)[0])
+            shift = np.linalg.norm(alternative["cf"]["t"] - world_poses["cf"]["t"])
+            if other_score <= score + .25 and (angle > np.deg2rad(2.) or shift > 10.):
+                raise ValueError("指定世界座標照片仍有無法區分的姿態解，請改用更清楚且有傾角的參考照片。")
     return {
         "schema": "metric_stereo_v1", "method": "pnp", "target_type": "wood_frame",
         "units": "mm", "coordinate_convention": CONVENTION,
         "R_cs_from_cf": best["R"].tolist(), "t_cs_from_cf_mm": best["t"].tolist(),
         "baseline_mm": float(np.linalg.norm(best["t"])), "intrinsics": copy.deepcopy(cameras),
         "wood_frame": copy.deepcopy(target), "best_pair_id": best["pair"]["id"],
+        "world_reference_pair_id": world_pair_id,
         "world": {
-            "source_pair_id": best["pair"]["id"], "units": "mm",
+            "source_pair_id": world_pair_id, "units": "mm",
             "coordinate_convention": WORLD_CONVENTION,
-            "description": "The selected pair's frame defines world coordinates. Other pairs only validate the fixed stereo rig.",
-            "cameras": {role: _world_pose(best[role]) for role in ("cf", "cs")},
+            "description": "The reference pair's physical frame defines world coordinates; the selected best pair defines the fixed stereo rig.",
+            "cameras": {role: _world_pose(world_poses[role]) for role in ("cf", "cs")},
         },
         "fit": {
             "selection": "One synchronized pair, ranked by median bidirectional reprojection on other paired poses + 0.25 * own RMS.",
@@ -417,8 +467,12 @@ def load_wood_frame_rig(path):
     validate_target(rig["wood_frame"])
     world = rig["world"]
     if (world.get("units") != "mm" or world.get("coordinate_convention") != WORLD_CONVENTION
-            or world.get("source_pair_id") != rig.get("best_pair_id")):
+            or world.get("source_pair_id") != rig.get("world_reference_pair_id", rig.get("best_pair_id"))):
         raise ValueError("木框世界座標定義或來源照片組不一致。")
+    reference_id = world["source_pair_id"]
+    if (reference_id in rig.get("rejected_pairs", [])
+            or not any(p.get("id") == reference_id for p in rig.get("source_pairs", []))):
+        raise ValueError("木框世界座標來源照片組缺失或已被排除。")
     transforms = {}
     for role in ("cf", "cs"):
         pose = world["cameras"][role]

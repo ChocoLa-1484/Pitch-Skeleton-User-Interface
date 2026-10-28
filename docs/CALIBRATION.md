@@ -1,6 +1,8 @@
 # 相機校正與量測
 
-給開發者看的校正說明：主流程、分步工具，以及各種校正方法與量測工具。使用者只需要 README 的「相機校正」一節。
+給開發者看的校正說明：主流程、分步工具，以及各種校正方法與量測工具。首次到場請先看 [實際校正操作單](FIRST_SITE_CALIBRATION.md)，包含程式入口、道具、照片數、左右投設定與場地座標步驟。
+
+**2026-10-28 預設規格**：棋盤格為 **8 × 7 內角點、每格 100 × 100 mm**（完整棋盤為 9 × 8 格）。下方 2026-10-08 歷史照片仍是 7 × 7，重算舊照片需明確傳 `--pattern 7 7`。木框改用本次重測座標，並新增非直角形狀校正及指定世界參考組；見第 4 節。
 
 > 2026-10-11 由以下文件整併而成；2026-10-20 將舊十字架章節更新為木框與手動座標流程：`DEVELOPMENT.md`「相機校正流程」一節、README 的校正細節、`CHESSBOARD_STRIDE.md`、`CROSS_CALIBRATION.md`、`FLUORESCENT_BALL_EXTRACTION.md`、`MAIN_METRIC.md`（第 3～6 節原作者：ChocoLa-1484）。
 
@@ -24,6 +26,7 @@
 | `Src/calibration/calib_store.py`、`calibration_workflow.py` | 共用：校正檔讀寫與發布、校正桿 F 計算 |
 | `Src/calibration/chessboard_cross/` | 同學（ChocoLa-1484）的公制方法：棋盤格內外參、螢光球提取（十字架計算 2026-10-21 由原作者移除，資料夾名稱沿用） |
 | `Src/calibration/calibrate_wood_frame.py`、`wood_frame.py` | 同學的木框 PnP 外參：視窗與計算（第 4 節） |
+| `Src/calibration/calibrate_wood_frame_geometry.py`、`wood_frame_geometry.py` | 單台已校正相機、多張同時可見兩面的照片，估計木框實際夾角與兩面相對位置 |
 | `Src/calibration/calibrate_two_rods.py`、`two_rod_calibration.py` | 同學的雙棒八球 8-point 外參：視窗與計算（第 7 節） |
 | `Src/calibration/calibrate_manual_coordinates.py`、`manual_coordinates.py` | 同學的手動原點／XYZ／尺度標註：視窗與資料格式（第 4 節） |
 | `Src/calibration/calibration_import.py` | 木框與雙棒共用的背景照片匯入 |
@@ -110,7 +113,7 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 獨立離線流程，依賴現有環境的 OpenCV、NumPy、SciPy，不需要相機 SDK、Qt 或骨架推論模型，不改動木框校正與 `fundamental.json`。
 
-### 本次設定
+### 2026-10-08 歷史資料設定
 
 - 照片：`Db/Record/Calibrate_Picture_Chessboard/{cf,cs}`，各 142 張。
 - 棋盤：**7×7 內角點，每格 100×100 mm**。首尾內角點有 6 個間隔，即 600 mm。
@@ -127,7 +130,7 @@ python -m unittest discover -s Src/UI_Control/tests -v
 conda activate Pitcher
 
 # 1. 只算內參、畸變與角點檢測
-python Src/calibration/chessboard_cross/calibrate_chessboard.py
+python Src/calibration/chessboard_cross/calibrate_chessboard.py --pattern 7 7
 
 # 2. 只算外參：讀取上一步內參，分別輸出 PnP 與 8-point
 python Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py --method both
@@ -200,11 +203,11 @@ python Src/tools/measure_stride_pnp.py --pose-annotations --reference-frame 0 --
 
 ### 算法
 
-內參用 `findChessboardCornersSB` 偵測 49 點，各相機獨立校正。預設等距抽樣最多 60 個有效視角，依每張重投影 RMS 排除明顯異常；k3 固定 0，其餘徑向／切向係數和 fx、fy、cx、cy 估計。輸出逐張 RMS、內參標準差、覆蓋率、失敗名單和角點預覽。
+內參用 `findChessboardCornersSB` 依棋盤設定偵測角點：新預設 8 × 7 為 56 點，本節歷史 7 × 7 資料為 49 點。各相機獨立校正，預設等距抽樣最多 60 個有效視角，依每張重投影 RMS 排除明顯異常；k3 固定 0，其餘徑向／切向係數和 fx、fy、cx、cy 估計。輸出逐張 RMS、內參標準差、覆蓋率、失敗名單和角點預覽。
 
 2026-10-13 修正 SB 旗標傳法：明確傳入 `flags=CALIB_CB_NORMALIZE_IMAGE`，失敗時加 `CALIB_CB_EXHAUSTIVE` 重試；兩次皆失敗才列入失敗名單。成功視角的 `detector`／`detection_flags` 記錄實際方法與旗標。第一次套用修正時請不要加 `--reuse-detections`，否則會沿用舊角點與漏偵測結果；如需保留原校正，請以 `--output` 指定新的輸出資料夾。
 
-PnP 路徑對每對棋盤求兩個 `solvePnP` 位姿，利用固定相機幾何的一致性，解決方形棋盤的八種角點編號方向；再以 `stereoCalibrate(CALIB_FIX_INTRINSIC)` 聯合精修共同雙目位姿。棋盤 100 mm 物件座標直接提供尺度。
+PnP 路徑對每對棋盤求兩個 `solvePnP` 位姿，利用固定相機幾何的一致性解決角點編號方向（正方形棋盤有八種方向）；再以 `stereoCalibrate(CALIB_FIX_INTRINSIC)` 聯合精修共同雙目位姿。棋盤 100 mm 物件座標直接提供尺度。
 
 8-point 路徑共用已對齊角點。PnP **只用於辨識點序**，此路徑 R、t、尺度並未使用 PnP 的數值：
 
@@ -243,7 +246,7 @@ CF 的 fx/fy 約 1.097，且部分雙目重投影超過 3 px，已記錄警告�
 若確認 fx/fy 比例，可明確指定：
 
 ```powershell
-python Src/calibration/chessboard_cross/calibrate_chessboard.py --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
+python Src/calibration/chessboard_cross/calibrate_chessboard.py --pattern 7 7 --fix-aspect-ratio 1 --output Db/Calibration/chessboard_square_pixels
 python Src/calibration/chessboard_cross/calibrate_chessboard_extrinsic.py --calibration Db/Calibration/chessboard_square_pixels --method both
 python Src/tools/measure_stride_pnp.py --calibration Db/Calibration/chessboard_square_pixels --annotate --reference-frame 0 --frame 115 --ground-plane
 ```
@@ -275,7 +278,19 @@ conda run --no-capture-output -n Pitcher python -m unittest discover -s Src/UI_C
 
 ## 4. 木框 PnP 外參與手動座標標註
 
-木框外參使用既有相機內參及已確認的固定木框三維點位，不需在 UI 輸入尺寸。舊十字架計算程式與專用測試已移除，既有 `Db/` 照片及校正資料保留。
+木框外參使用既有相機內參及木框三維點位。預設已更新為 2026-10-28 重測值，圖示單位按 cm 換成 mm；也可載入形狀校正後的目標 JSON。舊十字架計算程式與專用測試已移除，既有 `Db/` 照片及校正資料保留；舊工作階段須保留當時的 target，不能直接拿新尺寸重算舊木框。
+
+### 木框不垂直時：先校正形狀
+
+執行 `python -m Src.calibration.calibrate_wood_frame_geometry`。使用一台已完成內參的相機，收集 **12–20 張**不同姿態、傾斜與距離的照片（至少 5 張），**每張都必須同時看見 F1–F4、S1–S4 八點**。選相機序號對應的內參、匯入照片、依固定實體 ID 標八點，儲存工作階段並計算 `target.json`；再於木框 PnP 視窗載入。
+
+模型固定正面實測點及側面自身尺寸，估計兩面之間的完整剛體變換，不強制 90° 或假設鉸鏈位置。兩台未知外參的相機若各只看一面，不能單靠那些照片同時辨識木框角度與雙機外參。木框拆裝或變形後須重做。
+
+已保存標記可離線重算：
+
+```powershell
+python -m Src.calibration.calibrate_wood_frame_geometry --session path/to/geometry_session.json --output path/to/target.json
+```
 
 ### 木框 PnP 視窗
 
@@ -287,7 +302,7 @@ python Src/calibration/calibrate_wood_frame.py
 ```
 
 1. 選擇正面 CF、側面 CS 的既有內參，核對相機角色、序號及影像尺寸。鏡頭、焦距／對焦、影像裁切或解析度改變後，需先重做適用的內參。
-2. 核對固定木框點位表：正面依 F1→F4，側面依 S1→S4 標註。紙板厚度已確認為 `0.3 cm = 3 mm`，已反映在下表座標，不能再次加上厚度。
+2. 核對木框點位表或載入修正形狀的 `target.json`：正面依 F1→F4，側面依 S1→S4 標註。新量測值不再套用舊版紙板厚度位移，保留 F2 的 Y=233 mm 實測差異。
 3. 依拍攝指引收集約 15 組正面／側面照片（目標可調整為 5–30 組），也可匯入含 `cf/`、`cs/` 且兩邊檔名相同的既有照片。匯入在背景執行、顯示進度並可取消，單次可只補一組；取消或失敗會保留既有照片與標記。每組兩張必須是同一木框姿態，兩台相機保持固定；選擇清楚、可見且有足夠間隔的標記點。
 4. 在兩張圖上分別依序標註四點；模糊、遮擋或誤拍的照片可取消「採用這組」略過，原始照片仍保留。點位與略過設定自動保存到 `Db/Calibration/sessions/<時間>_wood_frame/session.json`；可在設定頁載入工作階段接續標註。至少需完成並採用 5 組才能計算，建議收集約 15 組不同姿態。尺寸與標記錯誤不能靠增加照片數修正。
 5. 計算每組 PnP 並檢查其他姿態的雙機一致性，依評分選擇最佳一組。結果頁顯示最佳組、雙機基線、各組 RMS 與未採用原因，也可返回檢視最佳組照片。計算結果先存至該工作階段的 `best_stereo.json`；按「儲存最佳一組外參」可匯出至預設 `Db/Calibration/wood_frame/stereo.json` 或自選位置，供既有公制校正讀取器使用。
@@ -296,20 +311,22 @@ python Src/calibration/calibrate_wood_frame.py
 
 | 視角／點位 | X | Y | Z |
 |---|---:|---:|---:|
-| 正面 F1 | 80 | 320 | -3 |
-| 正面 F2 | 320 | 320 | -3 |
-| 正面 F3 | 320 | 80 | -3 |
-| 正面 F4 | 80 | 80 | -3 |
-| 側面 S1 | 403 | 320 | 30 |
-| 側面 S2 | 403 | 320 | 270 |
-| 側面 S3 | 403 | 80 | 270 |
-| 側面 S4 | 403 | 80 | 30 |
+| 正面 F1 | 0 | 232 | 0 |
+| 正面 F2 | 232 | 233 | 0 |
+| 正面 F3 | 232 | 0 | 0 |
+| 正面 F4 | 0 | 0 | 0 |
+| 側面 S1 | 360 | 232 | 103 |
+| 側面 S2 | 360 | 232 | 335 |
+| 側面 S3 | 360 | 0 | 335 |
+| 側面 S4 | 360 | 0 | 103 |
 
-正面與側面標註的是不同平面上的各自四點，各平面仍可能有姿態歧義，需檢查品質結果與實際相機位置。拍攝時若移動木框，各組外參以該組木框座標為準，不能直接平均不同原點／方向的世界外參。需要固定場地座標時，應把木框放在已量測且可重現的基準位置，或另行提供木框到場地的剛體變換。
+正面與側面標註的是不同平面上的各自四點，各平面仍可能有姿態歧義，需檢查品質結果與實際相機位置。拍攝時若移動木框，各組世界外參以該組木框座標為準，不能直接平均。上表是名義幾何；載入形狀校正 JSON 後，以該檔保存的實際三維點為準。
+
+需要固定場地座標時，先拍約 15 組不同姿態，再把木框放在已量測且可重現的基準位置，於同一工作階段補拍 **3 組固定基準照片**。指定其中一組為世界座標參考組，再計算與匯出；基準組仍需通過品質檢查。F4 為原點、F4→F3 為 +X、F4→F1 為 +Y；本次 +Y 向上，不能誤寫成 +Z 向上。最後另拍 5 組獨立已知距離照片檢查尺度，步驟見 [首次到場操作單](FIRST_SITE_CALIBRATION.md)。
 
 外參沿用 OpenCV 方向：`X_camera = R_world_to_camera @ X_world + t_world_to_camera_mm`。`t` 是世界原點在相機座標中的位置；相機的世界位置是 `C = -R.T @ t`。像素重投影誤差用於挑選照片，但不等於整個投球範圍的實際量測精度；使用前仍需以未參與校正的已知距離核對。
 
-輸出使用 `metric_stereo_v1`，頂層 `R_cs_from_cf`／`t_cs_from_cf_mm` 為 CF→CS 相對外參，供既有三角化流程讀取。`world.cameras.cf/cs` 則保存兩台相機相對於最佳組木框的外參；檔案也保留內參快照、最佳組 ID、全部來源點位、各組診斷與評分。其他照片用於選擇相機間一致的候選解，沒有平均不同擺位的木框世界外參。
+輸出使用 `metric_stereo_v1`，頂層 `R_cs_from_cf`／`t_cs_from_cf_mm` 為 CF→CS 相對外參，供既有三角化流程讀取。`world.cameras.cf/cs` 保存相機相對於指定參考組木框的外參，`world.source_pair_id` 指出來源；未指定時沿用最佳組。檔案也保留內參快照、最佳組 ID、全部來源點位、各組診斷與評分。其他照片用於選擇相機間一致的候選解，沒有平均不同擺位的木框世界外參。`T_world_from_camera_mm` 可把同一校正的相機三維點轉到木框世界座標；目前主程式 3D 檢視仍以側面相機座標顯示，並不自動套用此世界變換。
 
 在主程式「3D」頁的「校正設定」選擇 PnP，再選取木框匯出的 `stereo.json` 並套用。`main_metric.py` 可用 `--calibration Db/Calibration/wood_frame/stereo.json` 指定。匯出木框外參不會自動取代舊校正桿的 `fundamental.json` 或舊錄影快照。
 

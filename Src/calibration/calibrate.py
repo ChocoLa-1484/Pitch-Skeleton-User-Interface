@@ -50,6 +50,7 @@ from PyQt5.QtWidgets import (
 )
 
 from Src.calibration import calib_store
+from Src.calibration.board_defaults import DEFAULT_PATTERN, DEFAULT_SQUARE_MM
 from Src.calibration.calibration_workflow import (
     MIN_PAIRS, estimate_wand_fundamental, match_image_pairs,
     publish_calibration, publish_intrinsics, save_json, validate_intrinsic, validate_roles,
@@ -268,12 +269,12 @@ class CalibrationWindow(QMainWindow):
         self.intrinsic_only = QCheckBox("只做內參（外參改用 RoMa：在校正中心選 RoMa，不拍校正桿）")
         form.addRow(self.intrinsic_only)
         self.cols, self.rows = QSpinBox(), QSpinBox()
-        for spin, value in ((self.cols, 8), (self.rows, 11)):
+        for spin, value in zip((self.cols, self.rows), DEFAULT_PATTERN):
             spin.setRange(3, 30)
             spin.setValue(value)
         self.square = QDoubleSpinBox()
         self.square.setRange(0.1, 1000)
-        self.square.setValue(10)
+        self.square.setValue(DEFAULT_SQUARE_MM)
         self.square.setSuffix(" mm")
         form.addRow("棋盤格內角點：寬（格子數 − 1）", self.cols)
         form.addRow("棋盤格內角點：高（格子數 − 1）", self.rows)

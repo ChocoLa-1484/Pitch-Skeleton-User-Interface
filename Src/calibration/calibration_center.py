@@ -114,6 +114,9 @@ class CalibrationCenter(QMainWindow):
                                 '讀取校正桿外參的標註點，以第 1、4 球實距 340 mm 換算尺度並畫出 3D 點。需先完成「校正桿手點」。',
                                 tag=('baseline', 'baseline'))
         self._add_chessboard()
+        self._add_window_method('木框幾何／夾角校正', CAL / 'calibrate_wood_frame_geometry.py',
+                                '使用一台已有內參的相機拍 12–20 張（至少 5 張），每張都須看見 F1–F4 與 S1–S4。'
+                                '估計兩面的相對位置與夾角，儲存 target JSON，再到「木框 PnP」載入。')
         self._add_window_method('木框 PnP', CAL / 'calibrate_wood_frame.py',
                                 '木框上 8 個已知座標點（正面 F1–F4、側面 S1–S4），拍約 15 組照片並標註，自動選出最好的一組。'
                                 '需先有兩台內參。結果存到 Db/Calibration/wood_frame/stereo.json，3D 分頁選「PnP」並選擇此檔。'
@@ -265,7 +268,7 @@ class CalibrationCenter(QMainWindow):
         page, layout = self._page(
             '棋盤格 PnP／8Points',
             '兩台相機同時拍的棋盤格照片（資料夾內含 cf、cs 兩個子資料夾、同名照片）。先各自算內參，再求雙機外參；'
-            '棋盤每格 100 mm 提供真實尺度。結果寫到 Db/Calibration/chessboard/，3D 分頁選「PnP／8Points」時使用。'
+            '預設 8×7 個內角點（實體棋盤 9×8 格），每格 100×100 mm。結果寫到 Db/Calibration/chessboard/，3D 分頁選「PnP／8Points」時使用。'
             '注意：只適用拍棋盤那天的相機位置。', tag=('classmate', '同學方法'))
         self.cb_images = FolderField(DB_DIR / 'Record')
         self.cb_method = QComboBox()

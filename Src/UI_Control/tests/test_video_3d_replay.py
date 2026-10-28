@@ -131,6 +131,23 @@ class Video3DTests(unittest.TestCase):
         tab._play_timer.stop()
         tab.is_play = False
 
+    def test_recording_context_restores_left_hand_and_saved_metric_calibration(self):
+        tab = self.setup_tab()
+        saved = self.folder / 'calibration_pnp.json'
+        saved.write_text(json.dumps(self.rig), encoding='utf-8')
+        (self.folder / 'recording_context.json').write_text(json.dumps({
+            'schema': 'pitch_recording_v1', 'pitch_hand': 'left',
+            'front': 'front', 'side': 'side-L', 'calibrations': {'pnp': saved.name}}), encoding='utf-8')
+        tab.calibration_combo.setCurrentIndex(tab.calibration_combo.findData('legacy'))
+        tab.updateVideoInfo()
+        tab._analysis_timer.stop()
+        self.assertEqual(tab.pitch_hand, 'left')
+        self.assertEqual(tab.heel_combo.currentData(), 24)
+        self.assertEqual(tab.pose_estimater.pitch_hand_id, 9)
+        self.assertEqual(tab.calibration_combo.currentData(), 'pnp')
+        self.assertEqual(Path(tab.calibration_path.text()), saved)
+        self.assertTrue(tab._calibration_ready, tab.calibration_status.text())
+
     def test_distortion_and_camera_order_recover_true_scale(self):
         xyz, pairs = self.points()
         for order in ('cf', 'cs'):

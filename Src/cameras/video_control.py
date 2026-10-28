@@ -32,6 +32,7 @@ class Camera:
     def __init__(self, camera_idx:int = 0):
         self.camera_idx = camera_idx
         self.is_opened = False
+        self.pitch_hand = "right"
         self.frame_count = 0
         self.fps_control = 6
         self.frame_size = None
@@ -53,7 +54,7 @@ class Camera:
     def open_camera(self):
         # 開啟相機，並設置回調來處理每一幀
         self.frame_count = 0
-        self.video_thread = VideoCaptureThread()
+        self.video_thread = VideoCaptureThread(pitch_hand=self.pitch_hand)
         self.video_thread.set_keep_raw(self.full_rate_recording)
         self.video_thread.frame_ready.connect(self.buffer_frame)
         self.video_thread.start_capture()

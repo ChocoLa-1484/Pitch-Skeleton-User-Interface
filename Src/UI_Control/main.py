@@ -16,7 +16,8 @@ os.environ.setdefault("CONDA_PREFIX", conda_prefix)
 qt_plugin_path = os.path.join(conda_prefix, "Library", "plugins", "platforms")
 if os.path.isdir(qt_plugin_path):
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_plugin_path
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QComboBox, QGroupBox,
+    QFormLayout, QPushButton, QMessageBox)
 
 # vispy 必須在 PySpin 等第三方 DLL 被載入前鎖定 Qt 後端，
 # 否則 PySpin 附帶的 DLL 會與 Qt 的 QtOpenGL 衝突，導致載入失敗。
@@ -30,6 +31,8 @@ from Src.UI_Control.widgets.video_widget_2 import PoseVideoTabControl
 from Src.UI_Control.widgets.pitch_widget import PosePitchTabControl
 from Src.UI_Control.widgets.video_widget_compare import PoseVideoCompareTabControl
 from Src.UI_Control.forms.main_window import Ui_MainWindow
+from Src.cameras.pitch_profiles import profile_serials
+from Src.UI_Control.widgets.pitch_camera_settings import PitchCameraSettingsDialog
 
 class Main(QMainWindow):
     def __init__(self):
@@ -39,6 +42,86 @@ class Main(QMainWindow):
         self.model = Model()
         self.init_tabs()
         self.camera_tab.configure_settings(self.pitch_tab, self.camera_sources)
+        self.configure_pitch_hand()
+
+    def configure_pitch_hand(self):
+        self.pitch_hand = "right" if self.pitch_tab.ui.pitchInput.isChecked() else "left"
+        self._changing_pitch_hand = False
+        group = QGroupBox("左右投相機")
+        form = QFormLayout(group)
+        self.pitch_hand_combo = QComboBox()
+        self.pitch_hand_combo.addItem("右投", "right")
+        self.pitch_hand_combo.addItem("左投", "left")
+        self.pitch_hand_combo.setCurrentIndex(self.pitch_hand_combo.findData(self.pitch_hand))
+        form.addRow("投球手別", self.pitch_hand_combo)
+        edit = QPushButton("左右投相機設定")
+        form.addRow(edit)
+        self.camera_tab.ui.verticalLayout_7.insertWidget(1, group)
+        self.pitch_tab.pitch_hand_handler = self.set_pitch_hand
+        self.video_tab.pitch_hand_handler = self.set_pitch_hand
+        self.pitch_hand_combo.currentIndexChanged.connect(
+            lambda: self.set_pitch_hand(self.pitch_hand_combo.currentData()))
+        edit.clicked.connect(self.edit_pitch_profiles)
+        self._sync_pitch_hand_controls()
+
+    def _sync_pitch_hand_controls(self):
+        hand = self.pitch_hand
+        self.pitch_hand_combo.blockSignals(True)
+        self.pitch_hand_combo.setCurrentIndex(self.pitch_hand_combo.findData(hand))
+        self.pitch_hand_combo.blockSignals(False)
+        for button, selected in ((self.pitch_tab.ui.pitchInput, hand == "right"),
+                                 (self.pitch_tab.ui.pitchInput_L, hand == "left")):
+            button.blockSignals(True)
+            button.setChecked(selected)
+            button.blockSignals(False)
+        for _, camera in self.camera_sources():
+            camera.pitch_hand = hand
+        for estimator in (self.pitch_tab.pose_estimater, self.pitch_tab.pose_estimater_2):
+            estimator.setPitchHandId(10 if hand == "right" else 9)
+        self.pitch_tab.pose_estimater_2.setKptId(10 if hand == "right" else 9)
+        self.video_tab.set_pitch_hand(hand)
+
+    def _capture_busy(self):
+        return (getattr(self.pitch_tab, "is_auto_recording", False)
+                or any(camera.is_auto_recording or
+                       (camera.video_writer is not None and camera.video_writer.is_writing)
+                       for _, camera in self.camera_sources()))
+
+    def set_pitch_hand(self, hand):
+        if self._changing_pitch_hand or hand == self.pitch_hand:
+            return True
+        if self._capture_busy():
+            self._sync_pitch_hand_controls()
+            QMessageBox.warning(self, "暫時無法切換", "錄影中請先停止錄影，再切換左右投相機。")
+            return False
+        tabs = (self.camera_tab, self.pitch_tab)
+        opened = [tab for tab in tabs if tab.camera.is_opened]
+        try:
+            # Offline playback still supports either hand before hardware is set.
+            if opened:
+                profile_serials(hand)
+        except (ValueError, OSError) as exc:
+            self._sync_pitch_hand_controls()
+            QMessageBox.warning(self, "無法切換相機", str(exc))
+            return False
+        self._changing_pitch_hand = True
+        try:
+            for tab in opened:
+                tab.ui.cameraCheckBox.setChecked(False)
+            self.pitch_hand = hand
+            self._sync_pitch_hand_controls()
+            for tab in opened:
+                tab.ui.cameraCheckBox.setChecked(True)
+        finally:
+            self._changing_pitch_hand = False
+        return True
+
+    def edit_pitch_profiles(self):
+        if self._capture_busy() or any(camera.is_opened for _, camera in self.camera_sources()):
+            QMessageBox.information(self, "請先關閉相機", "修改實體相機序號或外參檔前，請先關閉相機。")
+            return
+        if PitchCameraSettingsDialog(self).exec_():
+            self.video_tab.set_pitch_hand(self.pitch_hand, force=True)
 
     def camera_sources(self):
         return [("2D 相機", self.camera_tab.camera), ("2D", self.pitch_tab.camera)]

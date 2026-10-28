@@ -33,7 +33,7 @@ class ChessboardExtrinsicTests(unittest.TestCase):
                                            'total_images': 12} for c in ('cf', 'cs')}}
         self.R = cv2.Rodrigues(np.array([.04, -.19, .02]))[0]
         self.t = np.array([1100., 40., 200.])
-        obj = object_points()
+        obj = object_points((7, 7), 100.)  # Keep explicit historical dataset geometry.
         rng = np.random.default_rng(34)
         for i in range(12):
             rotation = cv2.Rodrigues(rng.uniform(-.45, .45, 3))[0]

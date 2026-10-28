@@ -9,6 +9,7 @@ if __package__ in (None, ""):
 import argparse
 from pathlib import Path
 import cv2
+from Src.calibration.board_defaults import DEFAULT_PATTERN, DEFAULT_SQUARE_MM
 from Src.calibration.chessboard_cross.chessboard_metric import (DEFAULT_IMAGES, DEFAULT_CALIBRATION,
     calibrate_intrinsics, detect_folder, object_points, read_json, write_json)
 
@@ -17,8 +18,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_IMAGES)
     parser.add_argument("--output", type=Path, default=DEFAULT_CALIBRATION)
-    parser.add_argument("--pattern", nargs=2, type=int, default=(7, 7), metavar=("COLS", "ROWS"))
-    parser.add_argument("--square-mm", type=float, default=100.)
+    parser.add_argument("--pattern", nargs=2, type=int, default=DEFAULT_PATTERN, metavar=("COLS", "ROWS"),
+                        help="Inner corners (default: 8 7; physical board: 9 x 8 squares)")
+    parser.add_argument("--square-mm", type=float, default=DEFAULT_SQUARE_MM,
+                        help="Physical square edge in mm (default: 100)")
     parser.add_argument("--max-views", type=int, default=60)
     parser.add_argument("--fix-aspect-ratio", type=float, help="Optional known fx/fy ratio, e.g. 1 for confirmed square pixels")
     parser.add_argument("--preview-every", type=int, default=10)

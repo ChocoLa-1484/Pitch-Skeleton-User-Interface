@@ -16,6 +16,7 @@ from Src.paths import DB_DIR
 from Src.UI_Control.forms.camera_ui import Ui_camera_ui
 from datetime import datetime
 from Src.cameras.video_control import Camera
+from Src.cameras.pitch_profiles import save_recording_context
 from Src.UI_Control.widgets.camera_settings import CameraSettingsPanel
 
 class PoseCameraTabControl(QWidget):
@@ -118,7 +119,12 @@ class PoseCameraTabControl(QWidget):
         """Toggle the camera on/off based on checkbox state."""
         if state == 2:
             # frame_width, frame_height, fps = 
-            self.camera.toggleCamera(True)
+            try:
+                self.camera.toggleCamera(True)
+            except Exception as exc:
+                self.ui.cameraCheckBox.setChecked(False)
+                QMessageBox.warning(self, "無法開啟相機", str(exc))
+                return
             # self.ui.ResolutionLabel.setText(f"(0, 0) - ({frame_width} x {frame_height}), FPS: {fps}")
             self.timer.start(1)
         else:
@@ -138,6 +144,9 @@ class PoseCameraTabControl(QWidget):
         current_time = datetime.now().strftime("%Y%m%d_%H%M")
         output_dir = f'{DB_DIR.as_posix()}/Record/C{self.ui.CameraIdInput.value()}_Fps120_{current_time}'
         os.makedirs(output_dir, exist_ok=True)
+        thread = self.camera.video_thread
+        if thread is not None:
+            save_recording_context(output_dir, self.camera.pitch_hand, thread.serial_front, thread.serial_side)
         video_filename = os.path.join(output_dir, f'CF_{current_time}.mp4')
         video_filename_2 = os.path.join(output_dir, f'CS_{current_time}.mp4')
         self.ui.showSkeletonCheckBox.setChecked(False)
@@ -164,7 +173,7 @@ class PoseCameraTabControl(QWidget):
             QMessageBox.warning(self, "無法儲存照片", "目前沒有可儲存的影像，請先開啟相機。")
             return
 
-        output_dir = f'{DB_DIR.as_posix()}/Record/Calibrate_Picture'
+        output_dir = f'{DB_DIR.as_posix()}/Record/Calibrate_Picture/{self.camera.pitch_hand}'
         cf_dir = os.path.join(output_dir, 'cf')
         cs_dir = os.path.join(output_dir, 'cs')
         os.makedirs(cf_dir, exist_ok=True)

@@ -10,6 +10,7 @@ import re
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
+from Src.calibration.board_defaults import DEFAULT_PATTERN, DEFAULT_SQUARE_MM
 
 from Src.paths import ROOT_DIR as ROOT
 DEFAULT_IMAGES = ROOT / "Db/Record/Calibrate_Picture_Chessboard"
@@ -40,7 +41,7 @@ def natural_key(path):
     return [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", str(path))]
 
 
-def object_points(pattern=(7, 7), square_mm=100.):
+def object_points(pattern=DEFAULT_PATTERN, square_mm=DEFAULT_SQUARE_MM):
     if min(pattern) < 3 or not np.isfinite(square_mm) or square_mm <= 0:
         raise ValueError("Use at least 3x3 inner corners and a positive square size in mm.")
     obj = np.zeros((pattern[0] * pattern[1], 3), np.float32)

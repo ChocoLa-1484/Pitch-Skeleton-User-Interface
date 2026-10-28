@@ -35,7 +35,7 @@ class CalibrationPhotoTests(unittest.TestCase):
 
     def board(self, dx=0, dy=0):
         image = np.full((480, 640, 3), 255, np.uint8)
-        for row in range(12):
+        for row in range(8):
             for col in range(9):
                 x, y = 70 + dx + col * 30, 40 + dy + row * 30
                 image[y:y + 30, x:x + 30] = 0 if (row + col) % 2 == 0 else 255
@@ -59,9 +59,9 @@ class CalibrationPhotoTests(unittest.TestCase):
         self.assertEqual(self.window.connected_sn, '123456')
         self.assertEqual(self.window.captured_count, 2)
         self.assertEqual(self.window.image_size, (640, 480))
-        self.assertEqual(self.window.imgpoints[0].shape, (88, 1, 2))
+        self.assertEqual(self.window.imgpoints[0].shape, (56, 1, 2))
         self.assertEqual([Path(p).name for p in self.window._photo_paths], ['01.png', '03.png'])
-        np.testing.assert_allclose(self.window.objpoints[0][1], [10, 0, 0])
+        np.testing.assert_allclose(self.window.objpoints[0][1], [100, 0, 0])
         log = self.window.log_area.toPlainText()
         for reason in ('幾乎相同', '影像尺寸', '未完整偵測', '無法解碼'):
             self.assertIn(reason, log)
@@ -96,7 +96,7 @@ class CalibrationPhotoTests(unittest.TestCase):
     def test_changed_square_size_requires_reloading_photos(self):
         self.save_image('01.png', self.board())
         self.window.load_photo_folder(self.folder, '123456')
-        self.window.spn_square.setValue(100)
+        self.window.spn_square.setValue(150)
         with patch.object(self.window, '_calibrate') as solve:
             self.window.run_calibration()
             solve.assert_not_called()

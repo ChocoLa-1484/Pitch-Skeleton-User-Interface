@@ -66,6 +66,18 @@ class PitchReplayTests(unittest.TestCase):
         self.tab.deleteLater()
         self.app.processEvents()
 
+    def test_recording_context_restores_left_hand_for_2d(self):
+        (self.folder / 'recording_context.json').write_text(json.dumps({
+            'schema': 'pitch_recording_v1', 'pitch_hand': 'left',
+            'front': 'front', 'side': 'side-L', 'calibrations': {}}), encoding='utf-8')
+        with patch.object(self.tab, '_load_saved_analysis', return_value=False), \
+                patch.object(self.tab, 'updateFrame'), patch.object(self.tab, 'playBtnClicked'):
+            self.tab.updateVideoInfo()
+        self.assertTrue(self.tab.ui.pitchInput_L.isChecked())
+        self.assertEqual(self.tab.camera.pitch_hand, 'left')
+        self.assertEqual(self.tab.pose_estimater.pitch_hand_id, 9)
+        self.assertEqual(self.tab.pose_estimater_2.pitch_hand_id, 9)
+
     def set_events(self):
         self.tab.preparation_frame = 2
         self.tab.foot_contact_frame = 4
