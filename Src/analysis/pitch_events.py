@@ -4,7 +4,7 @@ These are image-based candidates, not a measurement of glenohumeral rotation
 or ball separation. Look-ahead confirms landing/peaks but returns the event's
 frame, not the later confirmation frame. All distances scale with leg length.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import numpy as np
 
 EVENT_METHOD = 'side_view_ground_contact_raised_arm_v3'
@@ -20,27 +20,120 @@ class PitchEvents:
     br_confirmed: bool = False
 
 
-def detect_pitch_events(person_df, fps=60., throwing_hand='right', through_frame=None, person_id=None):
+class _PoseSequence:
+    """Parse a pose table once; prefix detection only takes NumPy views."""
+
+    def __init__(self, person_df, person_id=None):
+        self.frames = np.empty(0, dtype=int)
+        self.points = np.empty((0, 26, 3), dtype=float)
+        self.people = None
+        self.bad_prefix = np.empty(0, dtype=int)
+        self.person_prefix = np.empty(0, dtype=int)
+        self.one_person = False
+        if person_df is None or person_df.empty:
+            return
+        if not {'frame_number', 'person_id', 'keypoints'} <= set(person_df.columns):
+            return
+        rows = person_df
+        if person_id is not None:
+            rows = rows[rows.person_id == person_id]
+        rows = rows.sort_values('frame_number')
+        if rows.empty:
+            return
+        try:
+            self.frames = rows.frame_number.to_numpy(dtype=int)
+        except (ValueError, TypeError):
+            return
+        self.people = rows.person_id.reset_index(drop=True)
+        self.person_prefix = np.cumsum(self.people.notna().to_numpy())
+        self.one_person = self.people.nunique() == 1
+        bad = np.zeros(len(rows), dtype=bool)
+        keypoints = rows.keypoints.tolist()
+        try:
+            points = np.asarray(keypoints, dtype=float)
+            if points.ndim != 3 or points.shape[1] != 26 or points.shape[2] < 3:
+                raise ValueError('Expected HALPE-26 points')
+            self.points = points[:, :, :3]
+        except (ValueError, TypeError):
+            # A corrupt later observation must not invalidate an earlier prefix.
+            self.points = np.full((len(rows), 26, 3), np.nan)
+            for index, value in enumerate(keypoints):
+                try:
+                    point = np.asarray(value, dtype=float)
+                    if point.ndim != 2 or point.shape[0] != 26 or point.shape[1] < 3:
+                        raise ValueError('Expected HALPE-26 points')
+                    self.points[index] = point[:, :3]
+                except (ValueError, TypeError):
+                    bad[index] = True
+        bad[1:] |= np.diff(self.frames) == 0
+        self.bad_prefix = np.cumsum(bad)
+
+    def prefix(self, through_frame):
+        end = (len(self.frames) if through_frame is None else
+               int(np.searchsorted(self.frames, through_frame, side='right')))
+        if (not end or self.bad_prefix[end - 1] or not self.person_prefix[end - 1]
+                or (not self.one_person and self.people.iloc[:end].nunique() != 1)):
+            return self.frames[:0], self.points[:0], end
+        return self.frames[:end], self.points[:end], end
+
+
+class PitchEventDetector:
+    """Reusable per-video cache for playback and growing inference tables.
+
+    Dataframe replacement, row count, selected person and ``revision`` invalidate
+    parsed coordinates. Callers editing an existing row or its nested keypoints
+    must increment revision or call ``invalidate()``; object identity alone
+    cannot detect an in-place list edit. Hand and FPS changes invalidate results.
+    """
+
+    def __init__(self):
+        self.invalidate()
+
+    def invalidate(self):
+        self._source = None
+        self._source_key = None
+        self._sequence = None
+        self._result_key = None
+        self._result = None
+
+    def detect(self, person_df, fps=60., throwing_hand='right', through_frame=None,
+               person_id=None, revision=None):
+        source_key = (len(person_df) if person_df is not None else 0, person_id, revision)
+        if (person_df is not self._source or source_key != self._source_key
+                or self._sequence is None):
+            self._source = person_df  # Hold the object, so Python cannot reuse its id.
+            self._source_key = source_key
+            self._sequence = _PoseSequence(person_df, person_id)
+            self._result_key = None
+        frames, points, end = self._sequence.prefix(through_frame)
+        result_key = (end, fps, throwing_hand)
+        if result_key != self._result_key:
+            self._result = _detect_arrays(frames, points, fps, throwing_hand)
+            self._result_key = result_key
+        # Events are mutable; do not let a consumer mutate the cached result.
+        return replace(self._result)
+
+
+def detect_pitch_events(person_df, fps=60., throwing_hand='right', through_frame=None,
+                        person_id=None, cache=None, revision=None):
+    if cache is not None:
+        return cache.detect(person_df, fps, throwing_hand, through_frame, person_id, revision)
+    if through_frame is not None and person_df is not None and not person_df.empty:
+        person_df = person_df[person_df.frame_number <= through_frame]
+    sequence = _PoseSequence(person_df, person_id)
+    frames, points, _ = sequence.prefix(None)
+    return _detect_arrays(frames, points, fps, throwing_hand)
+
+
+def _detect_arrays(frames, p, fps, throwing_hand):
     result = PitchEvents()
-    if person_df is None or person_df.empty:
+    if not len(frames):
         return result
-    rows = person_df
-    if person_id is not None:
-        rows = rows[rows.person_id == person_id]
-    if through_frame is not None:
-        rows = rows[rows.frame_number <= through_frame]
-    # Never join different people into one motion sequence.
-    if rows.empty or rows.person_id.nunique() != 1 or rows.frame_number.duplicated().any():
-        return result
-    rows = rows.sort_values('frame_number')
-    frames = rows.frame_number.to_numpy(dtype=int)
     try:
-        p = np.asarray([np.asarray(k, float)[:, :3] for k in rows.keypoints])
+        fps = float(fps or 60)
     except (ValueError, TypeError):
-        return result
-    if p.ndim != 3 or p.shape[1:] != (26, 3):
-        return result
-    fps = max(float(fps or 60), 1.)
+        fps = 60.
+    fps = max(fps, 1.) if np.isfinite(fps) else 60.
     left = throwing_hand == 'left'
     hip, knee, ankle, rear = (12, 14, 16, 15) if left else (11, 13, 15, 16)
     shoulder, elbow, wrist = (5, 7, 9) if left else (6, 8, 10)
@@ -85,20 +178,23 @@ def detect_pitch_events(person_df, fps=60., throwing_hand='right', through_frame
     limit = frames[mer] if mer is not None else frames[-1]
     stance = striding & foot_ok & (frames <= limit)
     window = max(3, int(round(.045 * fps)))
-    stable = []
-    for i in range(prep + 1, len(frames) - window + 1):
-        end = i + window
-        if (not stance[i:end].all() or not np.all(np.diff(frames[i:end]) == 1)
-                or np.ptp(p[i:end, ankle, 0]) > .04 * leg
-                or np.ptp(foot_y[i:end]) > .04 * leg):
-            continue
-        stable.append(i)
-    if stable:
-        ground = np.percentile([np.median(foot_y[i:i+window]) for i in stable], 80)
-        for i in stable:
-            if np.min(foot_y[i:i+window]) >= ground - .025 * leg:
-                result.fc = int(frames[i])
-                break
+    if len(frames) >= window:
+        # Read-only rolling views replace per-frame Python slicing/reductions.
+        # Sorted unique frames make a span of window-1 equivalent to no gaps.
+        rolling = np.lib.stride_tricks.sliding_window_view
+        starts = np.arange(len(frames) - window + 1)
+        stable = np.flatnonzero((starts > prep) & rolling(stance, window).all(axis=1)
+                               & (frames[window - 1:] - frames[:len(starts)] == window - 1))
+        ankle_windows = rolling(p[:, ankle, 0], window)[stable]
+        foot_windows = rolling(foot_y, window)[stable]
+        steady = ((np.ptp(ankle_windows, axis=1) <= .04 * leg)
+                  & (np.ptp(foot_windows, axis=1) <= .04 * leg))
+        stable, foot_windows = stable[steady], foot_windows[steady]
+        if len(stable):
+            ground = np.percentile(np.median(foot_windows, axis=1), 80)
+            contacts = stable[np.min(foot_windows, axis=1) >= ground - .025 * leg]
+            if len(contacts):
+                result.fc = int(frames[contacts[0]])
     if result.fc is None or mer is None or frames[mer] <= result.fc:
         return result
     # Select the maximum raised-arm angle after contact, rather than locking

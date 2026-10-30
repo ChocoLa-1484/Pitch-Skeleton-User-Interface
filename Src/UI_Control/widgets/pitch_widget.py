@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QImage, QPixmap, QColor, QPainter, QFont, QPen
 from PyQt5.QtCore import Qt, QTimer, QRect, QEvent, QThread, pyqtSignal
 import numpy as np
-from Src.analysis.pitch_events import detect_pitch_events, EVENT_METHOD
+from Src.analysis.pitch_events import detect_pitch_events, PitchEventDetector, EVENT_METHOD
 from Src.UI_Control.widgets.keyframe_navigation import bind_keyframe_navigation
 import pandas as pd
 import sys
@@ -619,6 +619,8 @@ class PosePitchTabControl(QWidget):
 
     def _get_play_interval_ms(self) -> int:
         """Compute playback interval based on video fps and UI playback rate."""
+        if getattr(self, '_fast_analysis', False):
+            return 0  # Reanalysis is independent of the slow-motion playback rate.
         base_fps = self.video_loader.video_fps if self.video_loader.video_fps else 60
         try:
             rate = float(self.ui.slowMotionInput.currentText())
@@ -1324,9 +1326,12 @@ class PosePitchTabControl(QWidget):
         if frame_num <= getattr(self, '_last_phase_frame', -1):
             return
         self._last_phase_frame = frame_num
+        if not hasattr(self, '_pitch_event_cache'):
+            self._pitch_event_cache = PitchEventDetector()
         result = detect_pitch_events(self.pose_estimater_2.person_df,
             self.video_loader.video_fps, 'right' if self.ui.pitchInput.isChecked() else 'left',
-            through_frame=frame_num, person_id=self.pose_estimater_2.person_id)
+            through_frame=frame_num, person_id=self.pose_estimater_2.person_id,
+            cache=self._pitch_event_cache, revision=self.pose_estimater_2.pose_revision)
         previous = (self.foot_contact_frame, self.max_shoulder_angle_frame, self.wrist_speed_frame)
         self.preparation_frame, self.foot_contact_frame = result.preparation, result.fc
         self.max_shoulder_angle_frame, self.wrist_speed_frame = result.mer, result.br
@@ -1360,6 +1365,9 @@ class PosePitchTabControl(QWidget):
 
     def resetPhaseDetection(self):
         """重置階段檢測相關變量"""
+        self._pitch_event_cache = PitchEventDetector()
+        self._fast_analysis = False
+        self._analysis_preview_at = 0.0
         self.preparation_frame = None
         self.min_left_knee_y = np.inf
         self.prev_left_knee_y = None
@@ -1390,6 +1398,9 @@ class PosePitchTabControl(QWidget):
         total_start = time.perf_counter()
         if self.is_video:
             frame_num = self.ui.frameSlider.value()
+            preview_due = (not getattr(self, '_fast_analysis', False)
+                           or time.perf_counter() >= self._analysis_preview_at
+                           or frame_num == self.video_loader.total_frames - 1)
             video_fps = self.video_loader.video_fps if self.video_loader.video_fps else 60
 
             if self.preparation_frame is not None and self.wrist_speed_frame is not None:
@@ -1417,11 +1428,14 @@ class PosePitchTabControl(QWidget):
                         self._analysis_dirty = True
                         self._analysis_finalized = False
                     self.pose_analyzer_2.addAnalyzeInfo(frame_num)
-                    # 執行階段檢測
-                    self.phaseDetection(frame_num)
                     analyze_ms = (time.perf_counter() - t_analyze) * 1000.0
+                # Also finalize when the final image has no visible pitcher.
+                if preview_due:
+                    self.phaseDetection(frame_num)
             t_draw = time.perf_counter()
-            self.updateFrame(frame_num=frame_num)
+            if preview_due:
+                self.updateFrame(frame_num=frame_num)
+                self._analysis_preview_at = time.perf_counter() + 0.1
             draw_ms = (time.perf_counter() - t_draw) * 1000.0
 
             total_ms = (time.perf_counter() - total_start) * 1000.0
@@ -1562,6 +1576,10 @@ class PosePitchTabControl(QWidget):
     def _complete_video_analysis(self):
         if self._analysis_finalized and not self._analysis_dirty:
             return True
+        if getattr(self, '_fast_analysis', False):
+            self._fast_analysis = False
+            if hasattr(self, '_play_timer'):
+                self._play_timer.setInterval(self._get_play_interval_ms())
         if self.single_video_mode:
             self._mirror_single_video_analysis()
         self._render_keyframe_results()
@@ -1619,6 +1637,7 @@ class PosePitchTabControl(QWidget):
         self.ui.frameSlider.setValue(0)
         self.ui.frameSlider.blockSignals(False)
         self.ui.RecordStatelabel.setText("重新分析中…")
+        self._fast_analysis = True
         self.playBtnClicked()
 
     def exportReleasePointJson(self):
@@ -2248,8 +2267,8 @@ class PosePitchTabControl(QWidget):
 
         try:
             self.resetPhaseDetection()
-            self.pose_estimater.reset()
-            self.pose_estimater_2.reset()
+            # The loader already resets poses when the source changes. Preserve
+            # loaded skeletons here so a repeat scan only infers missing frames.
             self.pose_analyzer.reset()
             self.pose_analyzer_2.reset()
             self.image_drawer.reset()
@@ -2270,9 +2289,11 @@ class PosePitchTabControl(QWidget):
                 self.ui.skeletonVideoCheckBox.blockSignals(False)
 
             total_frames = int(self.video_loader.total_frames or 0)
+            last_frame = -1
+            next_progress_at = 0.0
             for frame_num in range(total_frames):
                 if not self.single_video_scan_running:
-                    break
+                    return
 
                 frame = self.video_loader.video_frames_2[frame_num]
                 self.pose_estimater_2.detectKpt(frame, frame_num, is_video=True)
@@ -2280,12 +2301,17 @@ class PosePitchTabControl(QWidget):
                 if person_df is not None and not person_df.empty:
                     self._analysis_dirty = True
                     self.pose_analyzer_2.addAnalyzeInfo(frame_num)
-                    self.phaseDetection(frame_num)
+                last_frame = frame_num
 
-                if frame_num % 8 == 0 or frame_num == total_frames - 1:
+                if time.perf_counter() >= next_progress_at or frame_num == total_frames - 1:
                     self.ui.frameNumLabel.setText(f"{frame_num}/{total_frames - 1}")
                     QApplication.processEvents()
+                    next_progress_at = time.perf_counter() + 0.1
 
+            if not self.single_video_scan_running:
+                return
+            if last_frame >= 0:
+                self.phaseDetection(last_frame)
             self._mirror_single_video_analysis()
             self.single_video_keyframes = {
                 "preparation_frame": self.preparation_frame,

@@ -12,7 +12,9 @@ class PoseAnalyzer:
         self.processed_frames = set()
 
     def addAnalyzeInfo(self, frame_num: int):
-        """Analyze information for each frame up to the current frame."""    
+        """Analyze each frame once; replay can reuse its stored measurements."""
+        if frame_num in self.processed_frames:
+            return
         person_kpt = self.pose_estimater.getPersonDf(frame_num= frame_num, is_select= True,is_kpt=True)
         
         if person_kpt is None:

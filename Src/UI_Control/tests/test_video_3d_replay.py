@@ -350,6 +350,19 @@ class Video3DTests(unittest.TestCase):
         self.assertFalse(hasattr(tab, 'save_analysis_button'))
         self.assertTrue(tab.ui.frameSlider.isEnabled())
 
+    def test_analysis_throttles_preview_but_reconstructs_every_frame(self):
+        tab = self.setup_tab()
+        tab._analysis_preview_at = float('inf')
+        with patch.object(tab, '_updateFrame') as preview, \
+                patch.object(tab, 'phaseDetection') as events:
+            for frame in range(12):
+                tab._analyze_video_frame(frame)
+        self.assertEqual(tab._analysis_frames, set(range(12)))
+        self.assertEqual(set(tab.viewer3d.all_3d_frames), set(range(12)))
+        self.assertEqual(preview.call_count, 1)
+        self.assertEqual(preview.call_args[0][-1], 11)
+        events.assert_called_once_with(11)
+
     def test_reanalysis_discards_manual_events_and_saves_new_detection(self):
         tab = self.setup_tab()
         self.run_tab_frames(tab)

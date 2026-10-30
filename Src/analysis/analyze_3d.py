@@ -17,6 +17,8 @@ class PoseAnalyzer:
 
     def addAnalyzeInfo(self, frame_num: int, frame_L, frame_R):
         """Analyze information for each frame up to the current frame."""
+        if frame_num in self.processed_frames:
+            return
         # if self.pose_estimater.person_id is None:
         #     return pd.DataFrame()
         

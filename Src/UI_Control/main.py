@@ -33,6 +33,7 @@ from Src.UI_Control.widgets.video_widget_compare import PoseVideoCompareTabContr
 from Src.UI_Control.forms.main_window import Ui_MainWindow
 from Src.cameras.pitch_profiles import profile_serials
 from Src.UI_Control.widgets.pitch_camera_settings import PitchCameraSettingsDialog
+from Src.UI_Control.widgets.appearance import configure_high_dpi, style_main_window
 
 class Main(QMainWindow):
     def __init__(self):
@@ -43,6 +44,7 @@ class Main(QMainWindow):
         self.init_tabs()
         self.camera_tab.configure_settings(self.pitch_tab, self.camera_sources)
         self.configure_pitch_hand()
+        style_main_window(self)
 
     def configure_pitch_hand(self):
         self.pitch_hand = "right" if self.pitch_tab.ui.pitchInput.isChecked() else "left"
@@ -127,6 +129,7 @@ class Main(QMainWindow):
         return [("2D 相機", self.camera_tab.camera), ("2D", self.pitch_tab.camera)]
 
     def closeEvent(self, event):
+        self.pitch_tab.single_video_scan_running = False
         self.camera_tab.settings_panel.timer.stop()
         self.camera_tab.preview_timer.stop()
         self.camera_tab.timer.stop()
@@ -155,6 +158,7 @@ if __name__ == '__main__':
     # Model configs, fonts and recordings use paths relative to this directory.
     # Support launching `python Src/UI_Control/main.py` from the project root.
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    configure_high_dpi()
     app = QApplication(sys.argv)
     main_window = Main()
     main_window.show()

@@ -42,6 +42,8 @@ class PoseEstimater:
         # 以幀號為索引的快取，供單影片分析結束時複製分析結果使用
         # （pitch_widget._mirror_single_video_analysis 依賴此屬性）
         self.person_df_by_frame = {}
+        self._frame_cache_source = self.person_df
+        self.pose_revision = 0
         self.fps_timer = FPSTimer()
         self.smooth_filter = OneEuroFilter()
         self.is_detect = False
@@ -136,15 +138,19 @@ class PoseEstimater:
         }
 
     def mergePersonData(self, pred_instances, person_ids: list, frame_num: int = None):
+        self.pose_revision += 1
         if frame_num is None:
             self.person_data = []
+            self.person_df_by_frame = {}
 
         if pred_instances is None or not person_ids:
             # Preserve video history but leave this frame empty. In live mode,
             # clear the previous pose so a missing pitcher is not still drawn.
             if frame_num is not None:
                 self.person_df_by_frame[int(frame_num)] = pd.DataFrame()
-            return pd.DataFrame(self.person_data)
+            result_df = pd.DataFrame(self.person_data)
+            self._frame_cache_source = result_df
+            return result_df
 
         person_bboxes = pred_instances['bboxes']
 
@@ -168,6 +174,7 @@ class PoseEstimater:
             self.person_data.append(person_info)
 
         result_df = pd.DataFrame(self.person_data)
+        self._frame_cache_source = result_df
 
         # 同步維護以幀號為索引的快取
         if frame_num is not None and not result_df.empty:
@@ -241,23 +248,37 @@ class PoseEstimater:
             if curr_person_data.empty or pre_person_data.empty:
                 continue  # 當前幀或前幀沒有該 person_id 的數據，跳過
 
-            pre_kpts = torch.tensor(pre_person_data.iloc[0]['keypoints'], device='cuda')
-            curr_kpts = torch.tensor(curr_person_data.iloc[0]['keypoints'], device='cuda')
-            smoothed_kpts = []
-
-            # 使用張量運算來進行平滑
+            # Only 26 points are involved. CUDA scalar operations here used to
+            # synchronize the GPU hundreds of times per frame. Keep the legacy
+            # stateful X-then-Y/point order, but calculate these scalars on CPU.
+            pre_kpts = np.asarray(pre_person_data.iloc[0]['keypoints'], dtype=np.float64)
+            curr_kpts = np.asarray(curr_person_data.iloc[0]['keypoints'], dtype=np.float64).copy()
             for pre_kpt, curr_kpt in zip(pre_kpts, curr_kpts):
-                pre_kptx, pre_kpty = pre_kpt[0], pre_kpt[1]
-                curr_kptx, curr_kpty, curr_conf, curr_label = curr_kpt[0], curr_kpt[1], curr_kpt[2], curr_kpt[3]
+                if pre_kpt[0] != 0 and pre_kpt[1] != 0 and curr_kpt[0] != 0 and curr_kpt[1] != 0:
+                    curr_kpt[0] = self.smooth_filter(curr_kpt[0], pre_kpt[0])
+                    curr_kpt[1] = self.smooth_filter(curr_kpt[1], pre_kpt[1])
+            self._store_keypoints(curr_person_data.index[0], curr_kpts.tolist())
 
-                if all([pre_kptx.item() != 0, pre_kpty.item() != 0, curr_kptx.item() != 0, curr_kpty.item() != 0]):
-                    curr_kptx = self.smooth_filter(curr_kptx, pre_kptx)
-                    curr_kpty = self.smooth_filter(curr_kpty, pre_kpty)
+    def _store_keypoints(self, row_index, keypoints):
+        """Keep exports, frame queries and the next merge on the same pose."""
+        self.person_df.at[row_index, 'keypoints'] = keypoints
+        position = self.person_df.index.get_loc(row_index)
+        if len(self.person_data) == len(self.person_df):
+            self.person_data[position]['keypoints'] = keypoints
+        else:
+            self.person_data = self.person_df.to_dict('records')
+        if 'frame_number' in self.person_df:
+            frame = int(self.person_df.at[row_index, 'frame_number'])
+            self.person_df_by_frame[frame] = self.person_df[
+                self.person_df['frame_number'] == frame].copy()
+        self.pose_revision += 1
 
-                smoothed_kpts.append([curr_kptx.cpu().item(), curr_kpty.cpu().item(), curr_conf.item(), curr_label.item()])
-
-            # 更新當前幀的數據
-            self.person_df.at[curr_person_data.index[0], 'keypoints'] = smoothed_kpts
+    def _rebuild_frame_cache(self):
+        self.person_df_by_frame = {
+            int(frame): group.copy()
+            for frame, group in self.person_df.groupby('frame_number')
+        } if 'frame_number' in self.person_df else {}
+        self._frame_cache_source = self.person_df
 
 
     def processImage(self, img, select_id=None):
@@ -404,6 +425,9 @@ class PoseEstimater:
             for i in range(0, max(self.processed_frames)):
                 condition_1 = (self.person_df['frame_number'] == i) & (self.person_df['person_id'] == before_correctId)
                 self.person_df.loc[condition_1, 'person_id'] = after_correctId
+            self.person_data = self.person_df.to_dict('records')
+            self._rebuild_frame_cache()
+            self.pose_revision += 1
 
     def setPersonId(self, person_id):
         self.person_id = person_id
@@ -460,22 +484,26 @@ class PoseEstimater:
     def getPersonDf(self, frame_num=None, is_select=False, is_kpt=False):
         if self.person_df.empty:
             return pd.DataFrame()
-        condition = pd.Series([True] * len(self.person_df))  # 初始條件設為全為 True
         if frame_num is not None:
-            condition &= (self.person_df['frame_number'] == frame_num)
+            # Imported/replaced DataFrames also rebuild lazily, so callers that
+            # copy a timeline do not accidentally reuse a prior video's cache.
+            if self._frame_cache_source is not self.person_df:
+                self._rebuild_frame_cache()
+            data = self.person_df_by_frame.get(int(frame_num))
+            if data is None or data.empty:
+                return None
+        else:
+            data = self.person_df
 
         if is_select and self.person_id is not None:
-            condition &= (self.person_df['person_id'] == self.person_id)
-
-        data = self.person_df.loc[condition].copy()
+            data = data[data['person_id'] == self.person_id]
 
         if data.empty:
             return None
 
         if is_kpt:
-            data = data['keypoints'].iloc[0]
-
-        return data
+            return data['keypoints'].iloc[0]
+        return data.copy()
 
     def getPrePersonDf(self, *joint_ids):
         if self.pre_person_df.empty:
@@ -491,26 +519,30 @@ class PoseEstimater:
         return joint_data
 
     def setProcessedData(self, person_df:pd.DataFrame):
+        self.pose_revision += 1
         if person_df.empty:
             return
-        self.person_df = person_df
-        self.person_data = person_df.to_dict('records')
-        self.pre_person_df = person_df[person_df.frame_number == person_df.frame_number.max()].copy()
+        self.person_df = person_df.reset_index(drop=True).copy()
+        self.person_data = self.person_df.to_dict('records')
+        self.pre_person_df = self.person_df[self.person_df.frame_number == self.person_df.frame_number.max()].copy()
         self.processed_frames = {frame_num for frame_num in self.person_df['frame_number']}
         # 從既有資料重建幀號快取（此路徑不經過 mergePersonData）
-        self.person_df_by_frame = {
-            int(fn): group.copy()
-            for fn, group in self.person_df.groupby('frame_number')
-        }
+        self._rebuild_frame_cache()
 
     def update_person_df(self, x:float, y:float,frame_num:int, correct_kpt_idx:int):
-        self.person_df.loc[(self.person_df['frame_number'] == frame_num) &
-                            (self.person_df['person_id'] == self.person_id), 'keypoints'].iloc[0][correct_kpt_idx] = [x, y, 0.9, 1]
+        rows = self.person_df.loc[(self.person_df['frame_number'] == frame_num) &
+                                 (self.person_df['person_id'] == self.person_id)]
+        if rows.empty:
+            return
+        points = np.asarray(rows.iloc[0]['keypoints'], dtype=float).copy()
+        points[correct_kpt_idx] = [x, y, 0.9, 1]
+        self._store_keypoints(rows.index[0], points.tolist())
 
     def clearKptBuffer(self):
         self.kpt_buffer = []
 
     def reset(self):
+        self.pose_revision += 1
         self.pitcher_target.reset()
         self.person_df = pd.DataFrame()
         self.pre_person_df = pd.DataFrame()
@@ -520,6 +552,7 @@ class PoseEstimater:
         self.person_data = []
         self.processed_frames = set()
         self.person_df_by_frame = {}
+        self._frame_cache_source = self.person_df
         self.fps_timer = FPSTimer()
         self.smooth_filter = OneEuroFilter()
         self.is_detect = False

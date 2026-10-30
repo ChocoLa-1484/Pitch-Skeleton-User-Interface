@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QColor, QImage, QPixmap, QPainter, QFont
 from PyQt5.QtCore import Qt, QTimer, QRect
 import numpy as np
-from Src.analysis.pitch_events import detect_pitch_events, EVENT_METHOD
+from Src.analysis.pitch_events import detect_pitch_events, PitchEventDetector, EVENT_METHOD
 from Src.UI_Control.widgets.keyframe_navigation import bind_keyframe_navigation
 import sys
 import cv2
@@ -424,9 +424,12 @@ class PoseVideoTabControl(QWidget):
 
     def _calibrated_phase_detection(self, frame):
         side = self.pose_estimater if self.video_loader.video_name.upper().startswith('CS') else self.pose_estimater_2
+        if not hasattr(self, '_pitch_event_cache'):
+            self._pitch_event_cache = PitchEventDetector()
         result = detect_pitch_events(side.person_df, self.video_loader.video_fps,
             'right' if self.heel_combo.currentData() == 25 else 'left',
-            through_frame=frame, person_id=side.person_id)
+            through_frame=frame, person_id=side.person_id,
+            cache=self._pitch_event_cache, revision=side.pose_revision)
         previous = (self.foot_contact_frame, self.max_shoulder_angle_frame, self.wrist_speed_frame)
         self.preparation_frame, self.foot_contact_frame = result.preparation, result.fc
         self.max_shoulder_angle_frame, self.wrist_speed_frame = result.mer, result.br
@@ -712,6 +715,8 @@ class PoseVideoTabControl(QWidget):
         self.graph_plotter.updateGraph(0)
 
     def resetPhaseDetection(self):
+        self._pitch_event_cache = PitchEventDetector()
+        self._analysis_preview_at = 0.0
         self._phase_last_frame = -1
         self._manual_events = set()
         self._analysis_dirty = False
@@ -1352,7 +1357,7 @@ class PoseVideoTabControl(QWidget):
         self._analysis_dirty = True
         self._set_analysis_running(True)
         self.calibration_status.setText('正在分析 0 / ' + str(self.video_loader.total_frames) + '，完成後自動儲存 JSON。')
-        self._analysis_timer.start(1)
+        self._analysis_timer.start(0)
 
     def _set_analysis_running(self, running):
         self._analysis_running = running
@@ -1388,14 +1393,20 @@ class PoseVideoTabControl(QWidget):
                 a, b = {'keypoints': left.iloc[0]['keypoints']}, {'keypoints': right.iloc[0]['keypoints']}
                 self.viewer3d.add_2d_keypoints(a, b, frame_num=frame_num)
                 self.pose_analyzer.addAnalyzeInfo(frame_num, a, b)
-        self.phaseDetection(frame_num)
         self._analysis_frames.add(frame_num)
         self._analysis_dirty = True
+        # Infer/reconstruct every frame, but only redraw expensive views at
+        # 10 Hz. The last frame always updates events and the final preview.
+        if (time.perf_counter() < self._analysis_preview_at
+                and frame_num != loader.total_frames - 1):
+            return
+        self.phaseDetection(frame_num)
         self.ui.frameSlider.blockSignals(True)
         self.ui.frameSlider.setValue(frame_num)
         self.ui.frameSlider.blockSignals(False)
         self.ui.frameNumLabel.setText(f'{frame_num}/{loader.total_frames - 1}')
         self._updateFrame(frame, frame_2, frame_num)
+        self._analysis_preview_at = time.perf_counter() + 0.1
 
     def _analyze_next_frame(self):
         if not self._analysis_running:

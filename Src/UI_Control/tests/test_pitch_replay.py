@@ -219,6 +219,61 @@ class PitchReplayTests(unittest.TestCase):
         self.assertEqual(len(json.loads((self.folder / 'single.json').read_text())), 12)
         self.assertFalse(self.tab.single_video_scan_running)
 
+    def test_single_video_scan_reuses_poses_and_detects_events_once(self):
+        self.tab.single_video_mode = True
+        self.set_poses()
+        with patch.object(self.tab.pose_estimater_2, 'processImage',
+                          side_effect=AssertionError('cached frame was inferred again')), \
+                patch.object(self.tab, 'phaseDetection') as detect:
+            self.tab.scan_single_video_keyframes()
+        detect.assert_called_once_with(11)
+        self.assertEqual(self.tab.pose_analyzer_2.processed_frames, set(range(12)))
+        self.assertEqual(len(self.tab.pose_estimater_2.person_df), 12)
+
+    def test_single_video_scan_cancel_does_not_export_completion(self):
+        self.tab.single_video_mode = True
+        self.set_poses()
+        def cancel():
+            self.tab.single_video_scan_running = False
+        with patch.object(self.module.QApplication, 'processEvents', side_effect=cancel), \
+                patch.object(self.tab, '_complete_video_analysis') as complete:
+            self.tab.scan_single_video_keyframes()
+        complete.assert_not_called()
+        self.assertTrue(self.tab.ui.playBtn.isEnabled())
+
+    def test_reanalysis_ignores_slow_motion_but_restores_playback_rate(self):
+        self.set_poses()
+        self.tab.ui.slowMotionInput.setCurrentText('0.5')
+        normal_interval = self.tab._get_play_interval_ms()
+        with patch.object(self.tab, 'playBtnClicked'):
+            self.tab.restart_video_analysis()
+        self.assertEqual(self.tab._get_play_interval_ms(), 0)
+        self.tab._complete_video_analysis()
+        self.assertEqual(self.tab._get_play_interval_ms(), normal_interval)
+
+    def test_replaying_analyzed_frame_skips_measurements(self):
+        self.set_poses()
+        with patch.object(self.tab.pose_estimater_2, 'getPersonDf',
+                          side_effect=AssertionError('recomputed an analyzed frame')):
+            self.tab.pose_analyzer_2.addAnalyzeInfo(4)
+
+    def test_fast_analysis_finalizes_events_when_last_pose_is_missing(self):
+        self.set_poses()
+        self.tab.ui.skeletonVideoCheckBox.blockSignals(True)
+        self.tab.ui.skeletonVideoCheckBox.setChecked(True)
+        self.tab.ui.skeletonVideoCheckBox.blockSignals(False)
+        self.tab.ui.frameSlider.blockSignals(True)
+        self.tab.ui.frameSlider.setValue(11)
+        self.tab.ui.frameSlider.blockSignals(False)
+        self.tab._fast_analysis = True
+        self.tab._analysis_preview_at = float('inf')
+        with patch.object(self.tab.pose_estimater_2, 'getPersonDf', return_value=self.pd.DataFrame()), \
+                patch.object(self.tab, 'phaseDetection') as phase, \
+                patch.object(self.tab, 'updateFrame'), \
+                patch.object(self.tab, '_complete_video_analysis'):
+            self.tab.analyzeFrame()
+        phase.assert_called_once_with(11)
+
     def test_replay_restores_mer_br_without_roi_or_skeleton(self):
         payload = {'Keyframes': {'preparation_frame': 2, 'FC': {'frame': 4},
                     'MER': {'frame': 7, 'shoulder_angle': 160.}, 'BR': {'frame': 10, 'wrist_speed': 15.}}}
