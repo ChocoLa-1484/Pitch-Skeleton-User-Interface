@@ -46,6 +46,8 @@ class Triangulate3DViewer:
         self.plane_normal_arrow = Arrow(color='magenta', width=2, parent=self.view.scene)
 
         self.scatter = scene.visuals.Markers(parent=self.view.scene)
+        self.release_marker = scene.visuals.Markers(parent=self.view.scene)
+        self.release_marker.visible = False
         self.head_lines = scene.visuals.Line(connect='segments', color='orange', width=2, parent=self.view.scene)
         self.left_lines = scene.visuals.Line(connect='segments', color='red', width=2, parent=self.view.scene)
         self.right_lines = scene.visuals.Line(connect='segments', color='blue', width=2, parent=self.view.scene)
@@ -69,6 +71,14 @@ class Triangulate3DViewer:
         )
 
         # self.load_and_triangulate()
+
+    def set_release_point(self, frame, wrist=10, visible=True):
+        points = self.all_3d_frames.get(frame)
+        valid = visible and points is not None and np.isfinite(points[wrist]).all()
+        self.release_marker.visible = bool(valid)
+        if valid:
+            self.release_marker.set_data(pos=np.asarray(points[wrist:wrist + 1], dtype=float),
+                                         face_color='gold', edge_color='red', size=14)
 
     def load_extrinsics(self, extrinsics_path):
         """加載你標定的外參 JSON 檔案
@@ -899,6 +909,7 @@ class Triangulate3DViewer:
 
     def reset(self):
         self.all_3d_frames = {}
+        self.release_marker.visible = False
         self.frame_idx = 0
         self.x_range = self.y_range = self.z_range = (0, 1)
         self._camera_range_initialized = False

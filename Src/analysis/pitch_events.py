@@ -6,6 +6,7 @@ frame, not the later confirmation frame. All distances scale with leg length.
 """
 from dataclasses import dataclass, replace
 import numpy as np
+from Src.analysis.pitch_hand import pitch_joints
 
 EVENT_METHOD = 'side_view_ground_contact_raised_arm_v3'
 
@@ -134,10 +135,10 @@ def _detect_arrays(frames, p, fps, throwing_hand):
     except (ValueError, TypeError):
         fps = 60.
     fps = max(fps, 1.) if np.isfinite(fps) else 60.
-    left = throwing_hand == 'left'
-    hip, knee, ankle, rear = (12, 14, 16, 15) if left else (11, 13, 15, 16)
-    shoulder, elbow, wrist = (5, 7, 9) if left else (6, 8, 10)
-    foot = [21, 23, 25] if left else [20, 22, 24]
+    joints = pitch_joints(throwing_hand)
+    hip, knee, ankle, rear = joints.hip, joints.knee, joints.ankle, joints.rear_ankle
+    shoulder, elbow, wrist = joints.shoulder, joints.elbow, joints.wrist
+    foot = list(joints.foot)
     valid = np.isfinite(p).all(axis=2) & (p[:, :, 2] >= .6)
     leg_ok = valid[:, [hip, knee, ankle]].all(axis=1)
     lengths = np.linalg.norm(p[:, hip, :2] - p[:, knee, :2], axis=1) + np.linalg.norm(p[:, knee, :2] - p[:, ankle, :2], axis=1)

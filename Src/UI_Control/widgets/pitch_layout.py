@@ -1,5 +1,6 @@
 """Layout adjustments shared by the 2D controller and UI previews."""
 from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QWidget, QSizePolicy, QScrollArea, QLabel
+from Src.UI_Control.widgets.analysis_layout import event_card, view_title, SIDEBAR_WIDTH
 
 
 def align_pitch_layout(ui):
@@ -25,21 +26,25 @@ def align_pitch_layout(ui):
         old.removeItem(header)
         header.setParent(None)
         header.setContentsMargins(0, 0, 0, 0)
-        name = QLabel('正面 CF' if column == 0 else '側面 CS')
-        name.setObjectName('viewTitle')
+        name = view_title('正面 CF' if column == 0 else '側面 CS')
         header.insertWidget(0, name)
         header_widget = QWidget()
         header_widget.setLayout(header)
         header_widget.setFixedHeight(34)
         grid.addWidget(header_widget, 0, column)
         view.setMinimumSize(280, 190)
-        view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        view.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         grid.addWidget(view, 1, column)
         grid.setColumnStretch(column, 1)
-    ui.resetBRBtn.setMinimumHeight(30)
+    ui.resetBRBtn.hide()
+    ui.ResolutionLabel.hide()
+    ui.line.hide()
+    # Keep release visibility directly below the skeleton visibility control.
+    ui.gridLayout.addWidget(ui.selectCheckBox, 3, 0)
+    ui.gridLayout.addWidget(ui.selectKptCheckBox, 4, 0)
+    ui.gridLayout.addWidget(ui.showBR_checkBox, 2, 0)
 
-    ui.tabWidget.setMinimumWidth(310)
-    ui.tabWidget.setMaximumWidth(360)
+    ui.tabWidget.setFixedWidth(SIDEBAR_WIDTH)
     # The capture/replay controls can grow independently from the preview row.
     for index in range(ui.tabWidget.count()):
         page = ui.tabWidget.widget(index)
@@ -54,6 +59,9 @@ def align_pitch_layout(ui):
 
     keyframes = QHBoxLayout()
     keyframes.setSpacing(8)
+    ui.FC_label_unit.setText('°\ncm')
+    ui.MER_label_unit.setText('°\n')
+    ui.BR_label_unit.setText('m/s\ncm')
     for old, title, view, metrics, button, label in (
             (ui.verticalLayout_2, ui.FC, ui.fcView, ui.horizontalLayout_10, ui.footContact_ptn, ui.footContact_label),
             (ui.verticalLayout_7, ui.MER, ui.merView, ui.horizontalLayout_16, ui.maxER_ptn, ui.maxER_label),
@@ -62,28 +70,10 @@ def align_pitch_layout(ui):
         old.setParent(None)
         old.removeWidget(title)
         title.hide()
-        header = QHBoxLayout()
-        button.setParent(view.parentWidget())
-        label.setParent(view.parentWidget())
-        button.setMinimumHeight(28)
-        header.addWidget(button)
-        header.addWidget(label)
-        old.insertLayout(0, header)
-        view.setMinimumSize(0, 150)
-        view.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        old.setStretch(1, 1)
-        old.removeItem(metrics)
-        metrics.setParent(None)
-        metrics_widget = QWidget()
-        metrics_widget.setLayout(metrics)
-        metrics.setContentsMargins(0, 0, 0, 0)
-        metrics_widget.setFixedHeight(44)
-        old.addWidget(metrics_widget)
-        card = QWidget()
-        card.setProperty('card', True)
-        old.setContentsMargins(8, 8, 8, 4)
-        old.setSpacing(6)
-        card.setLayout(old)
+        metric_widgets = [metrics.itemAt(i).widget() for i in range(metrics.count())
+                          if metrics.itemAt(i).widget() is not None]
+        card = event_card(button, label, view, metric_widgets)
+        old.deleteLater()
         keyframes.addWidget(card, 1)
     ui.KeyFrameGroupBox.hide()
     grid.addLayout(keyframes, 2, 0, 1, 2)
@@ -111,7 +101,6 @@ def align_pitch_layout(ui):
     # Keep long recording names from widening just the first preview column.
     ui.fileNameLabel.setMinimumWidth(0)
     ui.fileNameLabel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-    ui.groupBox_2.setMinimumWidth(310)
-    ui.groupBox_2.setMaximumWidth(360)
+    ui.groupBox_2.setFixedWidth(SIDEBAR_WIDTH)
     ui.RoiLabel.setMinimumSize(0, 0)
     ui.RoiLabel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)

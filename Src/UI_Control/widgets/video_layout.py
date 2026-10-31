@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QGridLayout, QHBoxLayout, QVBoxLayout, QGroupBox, QLabel, QWidget,
     QTabWidget, QScrollArea, QSizePolicy,
 )
+from Src.UI_Control.widgets.analysis_layout import event_card, playback_row, view_title, SIDEBAR_WIDTH
 
 
 def _empty_layout(layout):
@@ -22,7 +23,7 @@ def align_video_layout(ui, settings, events, status):
     root.setContentsMargins(8, 8, 8, 8)
     root.setSpacing(10)
     for widget in (ui.label, ui.label_2, ui.NameLabel, ui.NameLabel_2,
-                   ui.line, ui.loadProcessedVideoBtn, ui.selectKptCheckBox):
+                   ui.line, ui.loadProcessedVideoBtn, ui.selectKptCheckBox, ui.selectCheckBox, ui.resetBRBtn):
         widget.hide()
     ui.loadOriginalVideoBtn.setText('載入影片')
     ui.loadOriginalVideoBtn.setToolTip('選擇 Db/Record 下的原始 CF 或 CS 影片，自動配對同一次投球的另一視角。')
@@ -37,7 +38,7 @@ def align_video_layout(ui, settings, events, status):
         header = QWidget()
         row = QHBoxLayout(header)
         row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel(name))
+        row.addWidget(view_title(name))
         label.setMinimumWidth(0)
         label.setFont(QFont('Microsoft JhengHei', 10))
         label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -50,12 +51,11 @@ def align_video_layout(ui, settings, events, status):
         grid.setColumnStretch(column, 1)
 
     sidebar = QTabWidget()
-    sidebar.setMinimumWidth(310)
-    sidebar.setMaximumWidth(360)
+    sidebar.setFixedWidth(SIDEBAR_WIDTH)
     controls = QWidget()
     controls_layout = QVBoxLayout(controls)
     action_row = QHBoxLayout()
-    for button in (ui.loadOriginalVideoBtn, ui.startCodeBtn):
+    for button in (ui.loadOriginalVideoBtn,):
         button.setMinimumHeight(30)
         action_row.addWidget(button)
     controls_layout.addLayout(action_row)
@@ -64,11 +64,14 @@ def align_video_layout(ui, settings, events, status):
     controls_layout.addWidget(hint)
     display = QGroupBox('回放顯示')
     display_layout = QGridLayout(display)
-    for i, widget in enumerate((ui.showSkeletonCheckBox, ui.showBboxCheckBox,
-                                ui.showBR_checkBox, ui.resetBRBtn,
-                                ui.label_5, ui.slowMotionInput, ui.selectCheckBox)):
-        display_layout.addWidget(widget, i // 2, i % 2)
-    ui.resetBRBtn.setMinimumHeight(30)
+    for widget, row, column in ((ui.showSkeletonCheckBox, 0, 0), (ui.showBboxCheckBox, 0, 1),
+                                (ui.showBR_checkBox, 1, 0), (ui.label_5, 2, 0),
+                                (ui.slowMotionInput, 2, 1)):
+        display_layout.addWidget(widget, row, column)
+    status.setFont(QFont('Microsoft JhengHei', 10))
+    status.setMinimumWidth(0)
+    status.setWordWrap(True)
+    controls_layout.addWidget(status)
     controls_layout.addWidget(display)
     controls_layout.addStretch()
     scroll = QScrollArea()
@@ -101,43 +104,28 @@ def align_video_layout(ui, settings, events, status):
         label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         data_layout.addWidget(label, 1)
     sidebar.addTab(rapsodo, '球路資料')
+    ui.graph_widget.setMinimumSize(0, 200)
+    ui.graph_widget.setMaximumHeight(16777215)
+    sidebar.addTab(ui.graph_widget, '分析曲線')
     grid.addWidget(sidebar, 0, 2, 2, 1)
     ui.replay_sidebar = sidebar
 
     cards = QHBoxLayout()
     cards.setSpacing(8)
+    # Reserve the same two text lines in every card, including the MER card.
+    ui.MER_label_2.setText(ui.MER_label_2.text().rstrip() + '\n')
+    ui.FC_label_unit.setText('°\ncm')
+    ui.MER_label_unit.setText('°\n')
+    ui.BR_label_unit.setText('m/s\ncm')
     for button, label, view, metric_labels in (
             (ui.footContact_ptn, ui.footContact_label, ui.fcView, (ui.FC_label_2, ui.FC_label, ui.FC_label_unit)),
             (ui.maxER_ptn, ui.maxER_label, ui.merView, (ui.MER_label_2, ui.MER_label_3, ui.MER_label_unit)),
             (ui.release_ptn, ui.release_label, ui.brView, (ui.BR_label_2, ui.BR_label_3, ui.BR_label_unit))):
-        card = QVBoxLayout()
-        title = QHBoxLayout()
-        title.addWidget(button)
-        title.addWidget(label)
-        title.addStretch()
-        button.setMinimumHeight(28)
-        card.addLayout(title)
-        view.setMinimumSize(0, 150)
-        view.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        card.addWidget(view, 1)
-        metrics = QWidget()
-        row = QHBoxLayout(metrics)
-        row.setContentsMargins(0, 0, 0, 0)
-        for metric in metric_labels:
-            metric.setFont(QFont('Microsoft JhengHei', 10))
-            row.addWidget(metric)
-        metrics.setFixedHeight(40)
-        card.addWidget(metrics)
-        card_widget = QWidget()
-        card_widget.setProperty('card', True)
-        card.setContentsMargins(8, 8, 8, 4)
-        card.setSpacing(6)
-        card_widget.setLayout(card)
+        card_widget = event_card(button, label, view, metric_labels)
         cards.addWidget(card_widget, 1)
     grid.addLayout(cards, 2, 0, 1, 2)
     reconstruction = QGroupBox('3D 骨架')
-    reconstruction.setMinimumWidth(310)
-    reconstruction.setMaximumWidth(360)
+    reconstruction.setFixedWidth(SIDEBAR_WIDTH)
     reconstruction_layout = QVBoxLayout(reconstruction)
     reconstruction_layout.setContentsMargins(4, 4, 4, 4)
     reconstruction_layout.addWidget(ui.vispy_widget)
@@ -148,24 +136,8 @@ def align_video_layout(ui, settings, events, status):
     ui.analysis_sidebar = sidebar
     ui.analysis_auxiliary = reconstruction
     root.addLayout(grid, 1)
-    ui.graph_widget.setMinimumHeight(130)
-    ui.graph_widget.setMaximumHeight(210)
-    root.addWidget(ui.graph_widget)
-    status.setFont(QFont('Microsoft JhengHei', 10))
-    status.setMinimumWidth(0)
-    status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-    status.setFixedHeight(40)
-    root.addWidget(status)
-    playback = QHBoxLayout()
-    for button in (ui.backKeyBtn, ui.playBtn, ui.forwardKeyBtn):
-        button.setMinimumSize(40, 34)
-        button.setMaximumSize(50, 40)
-        playback.addWidget(button)
-    ui.frameSlider.setMinimumSize(200, 40)
-    ui.frameNumLabel.setFixedWidth(150)
-    playback.addWidget(ui.frameSlider, 1)
-    playback.addWidget(ui.frameNumLabel)
-    root.addLayout(playback)
+    ui.playback_layout = playback_row(ui, ui.startCodeBtn)
+    root.addLayout(ui.playback_layout)
     ui.ResolutionLabel.hide()
     for view in (ui.FrameView, ui.FrameView_2, ui.fcView, ui.merView, ui.brView):
         view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

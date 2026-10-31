@@ -48,6 +48,22 @@ def save_profile(hand, front, side, calibrations=None):
     atomic_json(profile_file(), {"schema": "pitch_camera_profiles_v1", "profiles": profiles})
 
 
+def save_camera_assignments(assignments):
+    """Save both hands together without changing their calibration settings."""
+    profiles = load_profiles()
+    for hand, (front, side) in assignments.items():
+        normalize_hand(hand)
+        front, side = str(front).strip(), str(side).strip()
+        if not front and not side and hand not in profiles:
+            continue  # An unused hand need not be configured yet.
+        label = "左投" if hand == "left" else "右投"
+        if not front or not side or front == side:
+            raise ValueError(f"{label}請填入不同的正面 CF 與側面 CS 實體相機序號。")
+        profile = profiles.setdefault(hand, {"calibrations": {}})
+        profile.update(front=front, side=side)
+    atomic_json(profile_file(), {"schema": "pitch_camera_profiles_v1", "profiles": profiles})
+
+
 def get_profile(hand):
     hand = normalize_hand(hand)
     profile = load_profiles().get(hand)

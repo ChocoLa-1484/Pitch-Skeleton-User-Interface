@@ -32,7 +32,8 @@ from Src.UI_Control.widgets.pitch_widget import PosePitchTabControl
 from Src.UI_Control.widgets.video_widget_compare import PoseVideoCompareTabControl
 from Src.UI_Control.forms.main_window import Ui_MainWindow
 from Src.cameras.pitch_profiles import profile_serials
-from Src.UI_Control.widgets.pitch_camera_settings import PitchCameraSettingsDialog
+from Src.UI_Control.widgets.pitch_camera_settings import (PitchCameraSettingsDialog,
+                                                         PitchCameraAssignmentsPanel)
 from Src.UI_Control.widgets.appearance import configure_high_dpi, style_main_window
 
 class Main(QMainWindow):
@@ -56,7 +57,10 @@ class Main(QMainWindow):
         self.pitch_hand_combo.addItem("左投", "left")
         self.pitch_hand_combo.setCurrentIndex(self.pitch_hand_combo.findData(self.pitch_hand))
         form.addRow("投球手別", self.pitch_hand_combo)
-        edit = QPushButton("左右投相機設定")
+        self.pitch_camera_assignments = PitchCameraAssignmentsPanel(self.can_edit_pitch_profiles)
+        self.pitch_camera_assignments.saved.connect(self._pitch_profiles_saved)
+        form.addRow(self.pitch_camera_assignments)
+        edit = QPushButton("左右投相機設定（含外參）")
         form.addRow(edit)
         self.camera_tab.ui.verticalLayout_7.insertWidget(1, group)
         self.pitch_tab.pitch_hand_handler = self.set_pitch_hand
@@ -68,6 +72,7 @@ class Main(QMainWindow):
 
     def _sync_pitch_hand_controls(self):
         hand = self.pitch_hand
+        self.pitch_camera_assignments.set_hand(hand)
         self.pitch_hand_combo.blockSignals(True)
         self.pitch_hand_combo.setCurrentIndex(self.pitch_hand_combo.findData(hand))
         self.pitch_hand_combo.blockSignals(False)
@@ -81,6 +86,7 @@ class Main(QMainWindow):
         for estimator in (self.pitch_tab.pose_estimater, self.pitch_tab.pose_estimater_2):
             estimator.setPitchHandId(10 if hand == "right" else 9)
         self.pitch_tab.pose_estimater_2.setKptId(10 if hand == "right" else 9)
+        self.pitch_tab.apply_pitch_hand(hand)
         self.video_tab.set_pitch_hand(hand)
 
     def _capture_busy(self):
@@ -118,12 +124,21 @@ class Main(QMainWindow):
             self._changing_pitch_hand = False
         return True
 
-    def edit_pitch_profiles(self):
+    def can_edit_pitch_profiles(self):
         if self._capture_busy() or any(camera.is_opened for _, camera in self.camera_sources()):
             QMessageBox.information(self, "請先關閉相機", "修改實體相機序號或外參檔前，請先關閉相機。")
+            return False
+        return True
+
+    def _pitch_profiles_saved(self):
+        self.video_tab.set_pitch_hand(self.pitch_hand, force=True)
+
+    def edit_pitch_profiles(self):
+        if not self.can_edit_pitch_profiles():
             return
         if PitchCameraSettingsDialog(self).exec_():
-            self.video_tab.set_pitch_hand(self.pitch_hand, force=True)
+            self.pitch_camera_assignments.reload()
+            self._pitch_profiles_saved()
 
     def camera_sources(self):
         return [("2D 相機", self.camera_tab.camera), ("2D", self.pitch_tab.camera)]

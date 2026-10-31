@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget, QBoxLayout,
 )
+from Src.UI_Control.widgets.analysis_layout import SIDEBAR_WIDTH
 
 
 def configure_high_dpi():
@@ -100,6 +101,8 @@ class ResponsivePage(QScrollArea):
             grid.removeWidget(sidebar)
             grid.removeWidget(auxiliary)
             if compact:
+                sidebar.setMinimumWidth(0)
+                auxiliary.setMinimumWidth(0)
                 sidebar.setMaximumWidth(16777215)
                 auxiliary.setMaximumWidth(16777215)
                 sidebar.setMinimumHeight(320)
@@ -109,8 +112,8 @@ class ResponsivePage(QScrollArea):
                 grid.setColumnStretch(2, 0)
                 grid.setRowStretch(3, 0)
             else:
-                sidebar.setMaximumWidth(360)
-                auxiliary.setMaximumWidth(360)
+                sidebar.setFixedWidth(SIDEBAR_WIDTH)
+                auxiliary.setFixedWidth(SIDEBAR_WIDTH)
                 sidebar.setMinimumHeight(0)
                 auxiliary.setMinimumHeight(0)
                 grid.addWidget(sidebar, 0, 2, 2, 1)

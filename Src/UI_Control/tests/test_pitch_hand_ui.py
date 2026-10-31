@@ -49,6 +49,72 @@ class PitchHandUiTests(unittest.TestCase):
         self.assertEqual(self.window.pitch_tab.pose_estimater_2.pitch_hand_id, 10)
         self.assertEqual(self.window.pitch_hand_combo.currentData(), "right")
 
+    def test_camera_fields_follow_selected_hand_and_keep_unsaved_edits(self):
+        from PyQt5.QtCore import QPoint
+        panel = self.window.pitch_camera_assignments
+        self.window.ui.Two_d_Tab.setCurrentIndex(0)
+        self.window.show()
+        self.window.resize(1500, 960)
+        for _ in range(4):
+            self.app.processEvents()
+
+        def geometry(hand):
+            return [(edit.mapTo(panel, QPoint(0, 0)), edit.size())
+                    for role in ('front', 'side') for edit in [panel.fields[hand, role]]]
+
+        original = geometry('right')
+        panel.fields['right', 'front'].setText('edited-front')
+        self.window.set_pitch_hand('left')
+        for _ in range(4):
+            self.app.processEvents()
+        self.assertEqual(geometry('left'), original)
+        for hand in ('left', 'right'):
+            for role in ('front', 'side'):
+                self.assertEqual(panel.fields[hand, role].isHidden(), hand == 'right')
+        self.assertEqual(self.window.pitch_tab.pitching_analyzer.hand, 'left')
+        self.window.set_pitch_hand('right')
+        for _ in range(4):
+            self.app.processEvents()
+        self.assertEqual(geometry('right'), original)
+        self.assertEqual(panel.fields['right', 'front'].text(), 'edited-front')
+
+    def test_2d_3d_video_cards_and_sliders_have_same_size(self):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QLabel
+        self.window.show()
+        for width, height in ((1500, 960), (980, 800)):
+            self.window.resize(width, height)
+            sizes = []
+            heading_fonts = []
+            for index in (1, 2):
+                self.window.ui.Two_d_Tab.setCurrentIndex(index)
+                for _ in range(4):
+                    self.app.processEvents()
+                ui = (self.window.pitch_tab if index == 1 else self.window.video_tab).ui
+                sizes.append([(getattr(ui, name).width(), getattr(ui, name).height())
+                              for name in ('FrameView', 'FrameView_2', 'fcView', 'merView', 'brView', 'frameSlider')])
+                sizes[-1].extend([(getattr(ui, name).width(), getattr(ui, name).height())
+                                  for name in ('footContact_ptn', 'maxER_ptn', 'release_ptn')])
+                self.assertFalse(ui.frameSlider.isHidden())
+                self.assertTrue(ui.resetBRBtn.isHidden())
+                headings = self.window.responsive_pages[index].findChildren(QLabel, 'viewTitle')
+                self.assertEqual([label.text() for label in headings], ['正面 CF', '側面 CS'])
+                heading_fonts.append([(label.font().weight(), label.font().pointSize()) for label in headings])
+                if index == 1:
+                    self.assertTrue(ui.line.isHidden())
+                    skeleton_row = ui.gridLayout.getItemPosition(ui.gridLayout.indexOf(ui.showSkeletonCheckBox))
+                    release_row = ui.gridLayout.getItemPosition(ui.gridLayout.indexOf(ui.showBR_checkBox))
+                    self.assertEqual(release_row[:2], (skeleton_row[0] + 1, skeleton_row[1]))
+                else:
+                    self.assertTrue(ui.selectCheckBox.isHidden())
+                    self.assertEqual(ui.FC_label_unit.text(), '°\ncm')
+                    self.assertEqual(ui.MER_label_unit.text(), '°\n')
+                    self.assertEqual(ui.BR_label_unit.text(), 'm/s\ncm')
+                    for metric in (ui.MER_label_2, ui.MER_label_3, ui.MER_label_unit):
+                        self.assertTrue(metric.alignment() & Qt.AlignVCenter)
+            self.assertEqual(sizes[0], sizes[1], (width, height, sizes))
+            self.assertEqual(heading_fonts[0], heading_fonts[1])
+
     def test_live_camera_reconnects_with_corresponding_serials_and_blocks_during_recording(self):
         camera = self.window.camera_tab.camera
         calls = []

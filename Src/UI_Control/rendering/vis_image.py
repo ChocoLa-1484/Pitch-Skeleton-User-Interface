@@ -1,3 +1,4 @@
+from Src.analysis.pitch_hand import pitch_joints, estimator_hand
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -292,6 +293,14 @@ class ImageDrawer():
         angle_deg = np.degrees(np.arccos(cos_theta))
         return float(angle_deg)
 
+    @property
+    def pitch_joints(self):
+        return pitch_joints(estimator_hand(self.pose_estimater))
+
+    @property
+    def shoulder_angle_name(self):
+        return "左肩外旋" if self.pose_estimater.pitch_hand_id == 9 else "右肩外旋"
+
     def drawAngleInfo(self, img: np.ndarray, frame_num: int, keyframe_type: str = None, start_frame: int = 1) -> np.ndarray:
         """
         根據關鍵幀類型繪製不同的分析信息。
@@ -383,7 +392,7 @@ class ImageDrawer():
             # 在右手肘處繪製水平紅色虛線（索引 8）
             # try:
             #     if keypoints is not None and len(keypoints) > 8:
-            #         right_elbow = keypoints[8]
+            #         right_elbow = keypoints[self.pitch_joints.elbow]
             #         if np.isfinite(right_elbow[0]) and np.isfinite(right_elbow[1]):
             #             y = int(right_elbow[1])
             #             h, w = img.shape[:2]
@@ -402,7 +411,7 @@ class ImageDrawer():
                 stride_distance = self._calculate_stride_distance(frame_num)
                 self.stride_distance = stride_distance  # 儲存跨步距離
                 if stride_distance is not None and keypoints is not None:
-                    left_ankle = keypoints[15]
+                    left_ankle = keypoints[self.pitch_joints.ankle]
                     if base_x is not None and np.isfinite(left_ankle[0]) and np.isfinite(left_ankle[1]):
                         pts = np.array([
                             (int(base_x), int(left_ankle[1]) + 70),
@@ -411,12 +420,12 @@ class ImageDrawer():
                             (int(left_ankle[0]), int(left_ankle[1]) + 70)
                         ], dtype=np.int32).reshape((-1, 1, 2))
                         cv2.polylines(img, [pts], False, (219, 124, 28), 5, cv2.LINE_AA)
-                    img, elbow_angle = self.draw_extended_angle(img, keypoints[6], keypoints[8], keypoints[10], offset=80, return_angle=True)
-                    img, knee_angle = self.draw_extended_angle(img, keypoints[15], keypoints[13], keypoints[11], offset=80, return_angle=True)
+                    img, elbow_angle = self.draw_extended_angle(img, keypoints[self.pitch_joints.shoulder], keypoints[self.pitch_joints.elbow], keypoints[self.pitch_joints.wrist], offset=80, return_angle=True)
+                    img, knee_angle = self.draw_extended_angle(img, keypoints[self.pitch_joints.ankle], keypoints[self.pitch_joints.knee], keypoints[self.pitch_joints.hip], offset=80, return_angle=True)
                     img = self.draw_styled_metric(img, left_ankle, "跨步距離", f"{stride_distance:.1f}", "cm", direction='right')
                     if elbow_angle is not None and knee_angle is not None:
-                        img = self.draw_styled_metric(img, keypoints[8], "肘彎曲", f"{elbow_angle}", "°", direction='left')
-                        img = self.draw_styled_metric(img, keypoints[13], "膝彎曲", f"{knee_angle}", "°", direction='right', offsety=-150)
+                        img = self.draw_styled_metric(img, keypoints[self.pitch_joints.elbow], "肘彎曲", f"{elbow_angle}", "°", direction='left')
+                        img = self.draw_styled_metric(img, keypoints[self.pitch_joints.knee], "膝彎曲", f"{knee_angle}", "°", direction='right', offsety=-150)
             except Exception as e:
                 self.stride_distance = None
                 print(f"Error calculating stride distance: {e}")
@@ -437,7 +446,7 @@ class ImageDrawer():
             # 獲取肩外旋角度
             try:
                 _, shoulder_angle = self.pose_analyzer.get_frame_angle_data(
-                    frame_num, angle_name="右肩外旋"
+                    frame_num, angle_name=self.shoulder_angle_name
                 )
                 if shoulder_angle is not None and keypoints is not None:
                     # 確保轉換為數字
@@ -445,11 +454,11 @@ class ImageDrawer():
                         shoulder_angle = int(shoulder_angle[0])
                     else:
                         shoulder_angle = int(shoulder_angle)
-                    img = self.draw_extended_angle(img, keypoints[10], keypoints[8], (keypoints[8][0] + 100, keypoints[8][1]), offset=0)
-                    img, knee_angle = self.draw_extended_angle(img, keypoints[15], keypoints[13], keypoints[11], offset=80, return_angle=True)
-                    img = self.draw_styled_metric(img, keypoints[6], "肩外旋角度", shoulder_angle, "°", direction='left', offsety=-150)
+                    img = self.draw_extended_angle(img, keypoints[self.pitch_joints.wrist], keypoints[self.pitch_joints.elbow], (keypoints[self.pitch_joints.elbow][0] + (100 if self.pitch_joints.wrist == 10 else -100), keypoints[self.pitch_joints.elbow][1]), offset=0)
+                    img, knee_angle = self.draw_extended_angle(img, keypoints[self.pitch_joints.ankle], keypoints[self.pitch_joints.knee], keypoints[self.pitch_joints.hip], offset=80, return_angle=True)
+                    img = self.draw_styled_metric(img, keypoints[self.pitch_joints.shoulder], "肩外旋角度", shoulder_angle, "°", direction='left', offsety=-150)
                     if knee_angle is not None:
-                        img = self.draw_styled_metric(img, keypoints[13], "膝彎曲", f"{knee_angle}", "°", direction='right')
+                        img = self.draw_styled_metric(img, keypoints[self.pitch_joints.knee], "膝彎曲", f"{knee_angle}", "°", direction='right')
             except Exception as e:
                 print(f"Error getting shoulder_angle: {e}")
         
@@ -468,7 +477,7 @@ class ImageDrawer():
             # 在左膝處繪製垂直紅色虛線（索引 13）
             # try:
             #     if keypoints is not None and len(keypoints) > 13:
-            #         left_knee = keypoints[13]
+            #         left_knee = keypoints[self.pitch_joints.knee]
             #         if np.isfinite(left_knee[0]) and np.isfinite(left_knee[1]):
             #             x = int(left_knee[0])
             #             h, w = img.shape[:2]
@@ -483,7 +492,7 @@ class ImageDrawer():
 
             try:
                 # 繪製手腕軌跡（索引 10）
-                img = self._draw_keypoint_trajectory(img, frame_num, kpt_index=10, start_frame=start_frame)
+                img = self._draw_keypoint_trajectory(img, frame_num, kpt_index=self.pitch_joints.wrist, start_frame=start_frame)
                 # img = self._draw_keypoint_trajectory(img, frame_num + 5, kpt_index=8, start_frame=start_frame, color=(100, 255, 100))
             except Exception as e:
                 print(f"Error drawing wrist trajectory: {e}")
@@ -499,7 +508,7 @@ class ImageDrawer():
                         wrist_speed = float(wrist_speed[0])
                     else:
                         wrist_speed = float(wrist_speed)
-                    img = self.draw_styled_metric(img, keypoints[10], "右手腕速度", f"{wrist_speed/100:.1f}", "m/s", direction='left')
+                    img = self.draw_styled_metric(img, keypoints[self.pitch_joints.wrist], "手腕速度", f"{wrist_speed/100:.1f}", "m/s", direction='left')
             except Exception as e:
                 print(f"Error getting wrist_speed: {e}")
 
@@ -511,19 +520,19 @@ class ImageDrawer():
                     base_x = self._get_baseline_right_ankle_x()
                     if base_x is not None:
                         pts = np.array([
-                            (int(base_x), int(keypoints[15][1]) - 800),
-                            (int(base_x), int(keypoints[15][1]) - 830),
-                            (int(keypoints[10][0]), int(keypoints[15][1]) - 830),
-                            (int(keypoints[10][0]), int(keypoints[15][1]) - 800)
+                            (int(base_x), int(keypoints[self.pitch_joints.ankle][1]) - 800),
+                            (int(base_x), int(keypoints[self.pitch_joints.ankle][1]) - 830),
+                            (int(keypoints[self.pitch_joints.wrist][0]), int(keypoints[self.pitch_joints.ankle][1]) - 830),
+                            (int(keypoints[self.pitch_joints.wrist][0]), int(keypoints[self.pitch_joints.ankle][1]) - 800)
                         ], dtype=np.int32).reshape((-1, 1, 2))
                         cv2.polylines(img, [pts], False, (0, 191, 194), 5, cv2.LINE_AA)
-                    img, knee_angle = self.draw_extended_angle(img, keypoints[15], keypoints[13], keypoints[11], offset=80, return_angle=True)
+                    img, knee_angle = self.draw_extended_angle(img, keypoints[self.pitch_joints.ankle], keypoints[self.pitch_joints.knee], keypoints[self.pitch_joints.hip], offset=80, return_angle=True)
                     img = self.draw_styled_metric(
-                        img, keypoints[10], "出手點距離", f"{extension_distance:.1f}", "cm",
+                        img, keypoints[self.pitch_joints.wrist], "出手點距離", f"{extension_distance:.1f}", "cm",
                         direction='right', value_color=(255, 255, 0), label_color=(255, 255, 0)
                     )
                     if knee_angle is not None:
-                        img = self.draw_styled_metric(img, keypoints[13], "膝彎曲", f"{knee_angle}", "°", direction='right', offsety=50)
+                        img = self.draw_styled_metric(img, keypoints[self.pitch_joints.knee], "膝彎曲", f"{knee_angle}", "°", direction='right', offsety=50)
             except Exception as e:
                 print(f"Error calculating extension distance: {e}")
                 self.extension_distance = None
@@ -609,7 +618,7 @@ class ImageDrawer():
                 return None
             
             # 右腳踝索引 16
-            right_ankle = keypoints[16][:2]  # 取 (x, y)
+            right_ankle = keypoints[self.pitch_joints.rear_ankle][:2]  # 取 (x, y)
             if right_ankle is None:
                 return None
             
@@ -637,13 +646,13 @@ class ImageDrawer():
                 return None
             
             # 左腳踝索引 15
-            left_ankle = keypoints[15][:2]  # 取 (x, y)
+            left_ankle = keypoints[self.pitch_joints.ankle][:2]  # 取 (x, y)
             
             if left_ankle is None:
                 return None
             
             # 計算跨步距離 = 當前幀左腳踝x - 基準點x
-            distance = left_ankle[0] - baseline_x
+            distance = abs(left_ankle[0] - baseline_x)
             # return float(distance * 0.278) # 6mm 鏡頭
             # return float(distance * 0.36) # 8mm 鏡頭
             return float(distance * 0.224) # 8mm 鏡頭
@@ -670,13 +679,13 @@ class ImageDrawer():
                 return None
             
             # 右手腕索引 10
-            right_wrist = keypoints[10][:2]  # 取 (x, y)
+            right_wrist = keypoints[self.pitch_joints.wrist][:2]  # 取 (x, y)
             
             if right_wrist is None:
                 return None
             
             # 計算出手點距離 = 當前幀右手腕x - 基準點x
-            distance = right_wrist[0] - baseline_x
+            distance = abs(right_wrist[0] - baseline_x)
             # return float(distance * 0.278) # 6mm 鏡頭
             # return float(distance * 0.36) # 8mm 鏡頭
             return float(distance * 0.224) # 8mm 鏡頭

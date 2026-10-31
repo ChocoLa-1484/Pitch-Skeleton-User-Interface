@@ -1,8 +1,83 @@
 """User-supplied physical camera assignments for each pitching hand."""
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget)
+    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QStackedWidget, QSizePolicy)
 
-from Src.cameras.pitch_profiles import get_profile, calibration_path, save_profile
+from Src.cameras.pitch_profiles import (get_profile, calibration_path, save_profile,
+                                       save_camera_assignments)
+
+
+class PitchCameraAssignmentsPanel(QWidget):
+    """Switch camera pairs inside two fixed form rows."""
+    saved = pyqtSignal()
+
+    def __init__(self, can_save, parent=None):
+        super().__init__(parent)
+        self.can_save = can_save
+        form = QFormLayout(self)
+        self.form = form
+        form.setContentsMargins(0, 0, 0, 0)
+        self.fields = {}
+        self.stacks = {}
+        for role, view in (("front", "正面 CF"), ("side", "側面 CS")):
+            stack = QStackedWidget()
+            stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            for hand in ("left", "right"):
+                edit = QLineEdit()
+                edit.setObjectName(f"{hand}_{role}_serial")
+                edit.setPlaceholderText("實體相機序號")
+                edit.textChanged.connect(self._mark_unsaved)
+                self.fields[hand, role] = edit
+                stack.addWidget(edit)
+            form.addRow(view, stack)
+            self.stacks[role] = stack
+        note = QLabel("尚未設定的手別可留空；同一手別的正面與側面序號須不同。\n"
+                      "儲存前請先關閉相機，下次開啟時套用。")
+        note.setWordWrap(True)
+        form.addRow(note)
+        self.save_button = QPushButton("儲存相機配置")
+        self.save_button.clicked.connect(self.save)
+        form.addRow(self.save_button)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        form.addRow(self.status)
+        self.reload()
+        self.set_hand("right")
+
+    def set_hand(self, hand):
+        """Keep edits for both hands, showing only the selected CF/CS pair."""
+        for role, stack in self.stacks.items():
+            stack.setCurrentWidget(self.fields[hand, role])
+
+    def _mark_unsaved(self):
+        self.status.setText("尚未儲存")
+
+    def reload(self):
+        try:
+            profiles = {hand: get_profile(hand) or {} for hand in ("left", "right")}
+        except (ValueError, OSError) as exc:
+            self.status.setText(f"無法讀取相機配置：{exc}")
+            return
+        for (hand, role), edit in self.fields.items():
+            edit.setText(str(profiles[hand].get(role, "")))
+        self.status.clear()
+
+    def save(self):
+        if not self.can_save():
+            return
+        assignments = {
+            hand: (self.fields[hand, "front"].text(), self.fields[hand, "side"].text())
+            for hand in ("left", "right")
+        }
+        try:
+            save_camera_assignments(assignments)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "設定未儲存", str(exc))
+            return
+        self.reload()
+        self.status.setText("相機配置已儲存，下次開啟相機時套用。")
+        self.saved.emit()
 
 
 class PitchCameraSettingsDialog(QDialog):

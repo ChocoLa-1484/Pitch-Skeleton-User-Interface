@@ -1,9 +1,10 @@
 """Profiles and recording copies must keep physical camera identities intact."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from Src.cameras import pitch_profiles as profiles
 
@@ -39,6 +40,25 @@ class PitchCameraProfileTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 profiles.save_profile('left', front, side)
 
+    def test_assignment_save_preserves_calibrations_and_all_four_serials(self):
+        path = self.root / 'left-stereo.json'
+        profiles.save_profile('left', 'old-front', 'old-side', {'pnp': str(path)})
+        profiles.save_camera_assignments({
+            'left': (' shared-front ', 'left-side'),
+            'right': ('shared-front', 'right-side'),
+        })
+        self.assertEqual(profiles.profile_serials('left'), ('shared-front', 'left-side'))
+        self.assertEqual(profiles.profile_serials('right'), ('shared-front', 'right-side'))
+        self.assertEqual(profiles.calibration_path('left', 'pnp'), path)
+
+    def test_invalid_second_hand_does_not_partially_save_first_hand(self):
+        profiles.save_profile('left', 'front', 'side')
+        before = profiles.profile_file().read_bytes()
+        for right in (('same', 'same'), ('front', '')):
+            with self.assertRaises(ValueError):
+                profiles.save_camera_assignments({'left': ('new-front', 'new-side'), 'right': right})
+            self.assertEqual(profiles.profile_file().read_bytes(), before)
+
     def rig(self, side='left-side'):
         camera = {'intrinsic_matrix': [[800., 0., 320.], [0., 800., 240.], [0., 0., 1.]],
                   'distortion_coefficients': [0.] * 5, 'image_size': [640, 480]}
@@ -73,6 +93,59 @@ class PitchCameraProfileTests(unittest.TestCase):
         self.assertNotIn('pnp', context['calibrations'])
         self.assertTrue(context['warnings'])
         self.assertIsNone(profiles.recording_calibration(self.root / 'record', 'pnp'))
+
+
+class PitchCameraAssignmentsPanelTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        from PyQt5.QtWidgets import QApplication
+        from Src.UI_Control.widgets.pitch_camera_settings import PitchCameraAssignmentsPanel
+        cls.app = QApplication.instance() or QApplication([])
+        cls.panel_type = PitchCameraAssignmentsPanel
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        for item in (patch.object(profiles.calib_store, 'CALIB_DIR', temp.name),
+                     patch.object(profiles.calib_store, 'load_roles', return_value=('old-front', 'old-side'))):
+            item.start()
+            self.addCleanup(item.stop)
+        self.can_save = Mock(return_value=True)
+        self.panel = self.panel_type(self.can_save)
+        self.addCleanup(self.panel.close)
+
+    def test_save_and_reload_four_fields_with_legacy_right_defaults(self):
+        self.assertEqual(self.panel.fields['right', 'front'].text(), 'old-front')
+        self.assertEqual(self.panel.fields['left', 'front'].text(), '')
+        saved = Mock()
+        self.panel.saved.connect(saved)
+        for hand in ('left', 'right'):
+            for role in ('front', 'side'):
+                self.panel.fields[hand, role].setText(f' {hand}-{role} ')
+        self.panel.save_button.click()
+        saved.assert_called_once_with()
+        reopened = self.panel_type(self.can_save)
+        self.addCleanup(reopened.close)
+        for hand in ('left', 'right'):
+            for role in ('front', 'side'):
+                self.assertEqual(reopened.fields[hand, role].text(), f'{hand}-{role}')
+
+    def test_open_camera_guard_prevents_writing(self):
+        self.can_save.return_value = False
+        self.panel.save_button.click()
+        self.can_save.assert_called_once_with()
+        self.assertFalse(profiles.profile_file().exists())
+
+    def test_unconfigured_hand_can_stay_empty_but_partial_pair_cannot_save(self):
+        self.panel.save_button.click()
+        self.assertNotIn('left', profiles.load_profiles())
+        before = profiles.profile_file().read_bytes()
+        self.panel.fields['left', 'front'].setText('left-front')
+        with patch('Src.UI_Control.widgets.pitch_camera_settings.QMessageBox.warning') as warning:
+            self.panel.save_button.click()
+        warning.assert_called_once()
+        self.assertEqual(profiles.profile_file().read_bytes(), before)
 
 
 if __name__ == '__main__':

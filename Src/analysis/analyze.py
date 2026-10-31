@@ -1,12 +1,15 @@
 import numpy as np
 import pandas as pd
 from Src.pose.detect_skeleton import PoseEstimater
+from Src.analysis.pitch_hand import pitch_joints, estimator_hand
 
 class PoseAnalyzer:
     def __init__(self, pose_estimater:PoseEstimater, fps: int = 30):
         self.pose_estimater = pose_estimater
         self.fps = fps
-        self.angle_dict = self.pose_estimater.joints['haple']['angle_dict']
+        self.angle_dict = dict(self.pose_estimater.joints['haple']['angle_dict'])
+        self.angle_dict.update({'左手肘': [5, 7, 9], '左肩膀': [18, 5, 7],
+                                '左腋窩': [7, 5, 19], '左肩外旋': [9, 7, 7]})
         self.analyze_info = []
         self.analyze_df = pd.DataFrame()
         self.processed_frames = set()
@@ -19,13 +22,14 @@ class PoseAnalyzer:
         
         if person_kpt is None:
             return
+        joints = pitch_joints(estimator_hand(self.pose_estimater))
         info = {
             'frame_number': frame_num,
             'angle': self._update_analyze_information(person_kpt),
-            'elbow_angle_2d': self._calculate_2d_angle_velocity(6, 8, 10),
+            'elbow_angle_2d': self._calculate_2d_angle_velocity(joints.shoulder, joints.elbow, joints.wrist, frame_num),
             # 'ankle_speed_2d': self._calculate_2d_joint_velocity(24, frame_num), # 左腳跟
-            'ankle_speed_2d': self._calculate_2d_joint_velocity(15, frame_num),
-            'wrist_speed_2d': self._calculate_2d_joint_velocity(10, frame_num),
+            'ankle_speed_2d': self._calculate_2d_joint_velocity(joints.ankle, frame_num),
+            'wrist_speed_2d': self._calculate_2d_joint_velocity(joints.wrist, frame_num),
             'left_ankle_landed': self.is_left_ankle_landed(frame_num=frame_num)
         }
 
@@ -63,15 +67,16 @@ class PoseAnalyzer:
             C = person_kpt[kpt_list[2]][:2]
             info[angle_name] = [self._calculate_angle(A, B, C), [np.array(A), np.array(B), np.array(C)]]
 
-            if angle_name == "右腋窩":
+            if angle_name in ("右腋窩", "左腋窩"):
                 A = person_kpt[kpt_list[0]][:2]
                 B = person_kpt[kpt_list[1]][:2]
                 C = [person_kpt[kpt_list[1]][0], person_kpt[kpt_list[2]][1]]
                 info[angle_name] = [self._calculate_angle(A, B, C), [np.array(A), np.array(B), np.array(C)]]
-            if angle_name == "右肩外旋":
+            if angle_name in ("右肩外旋", "左肩外旋"):
                 A = person_kpt[kpt_list[0]][:2]
                 B = person_kpt[kpt_list[1]][:2]
-                C = [person_kpt[kpt_list[1]][0] + 100, person_kpt[kpt_list[2]][1]]
+                direction = 1 if angle_name == "右肩外旋" else -1
+                C = [person_kpt[kpt_list[1]][0] + direction * 100, person_kpt[kpt_list[1]][1]]
                 info[angle_name] = [self._calculate_angle(A, B, C), [np.array(A), np.array(B), np.array(C)]]    
         return info
     
@@ -214,7 +219,6 @@ class PoseAnalyzer:
 
             # 計算角速度（度/f）
             angle_velocity_2d = (angle_diff - angle_diff_prev)
-            print(f"Frame {frame_num}: Angle Velocity 2D = {angle_velocity_2d:.2f}°/frame")
 
             return int(angle_velocity_2d)
 
@@ -227,7 +231,7 @@ class PoseAnalyzer:
         window_size: int = 5,
         spatial_var_threshold: float = 45.0
     ):
-        """用 pandas rolling variance 判斷左腳踝是否著地。"""
+        """判斷前導腳著地；保留舊方法名稱以相容既有分析檔。"""
         if self.pose_estimater.person_df.empty:
             return False
 
@@ -246,10 +250,11 @@ class PoseAnalyzer:
         if person_df.empty:
             return False
 
+        ankle = pitch_joints(estimator_hand(self.pose_estimater)).ankle
         def _extract_left_ankle(kpts):
-            if kpts is None or len(kpts) <= 15:
+            if kpts is None or len(kpts) <= ankle:
                 return pd.Series({'l_ankle_x': np.nan, 'l_ankle_y': np.nan})
-            x, y = kpts[15][:2]
+            x, y = kpts[ankle][:2]
             return pd.Series({'l_ankle_x': x, 'l_ankle_y': y})
 
         # 🚩 優先使用平滑後的數據進行分析，避免抖動影響判斷

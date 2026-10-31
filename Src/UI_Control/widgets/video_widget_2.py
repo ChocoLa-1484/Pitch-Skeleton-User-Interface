@@ -45,6 +45,7 @@ from Src.analysis.metric_session import load_rig
 from Src.UI_Control.viewers.metric_3d_viewer import MetricTriangulate3DViewer
 from Src.analysis.analyze import PoseAnalyzer as PoseAnalyzer2D
 from Src.UI_Control.widgets.video_layout import align_video_layout
+from Src.UI_Control.rendering.release_points import release_point, draw_release_points
 from Src.paths import DB_DIR
 
 class SliderColorOverlay(QWidget):
@@ -388,7 +389,7 @@ class PoseVideoTabControl(QWidget):
         metric = method != 'legacy'
         self.ui.FC_label_2.setText('肩髖分離角度:\n' + ('同一後腳3D位移:' if metric else '跨步距離:'))
         self.ui.BR_label_2.setText('右手腕速度:\n' + ('初始腳跟至手腕3D距離:' if metric else '出手點距離:'))
-        self.ui.MER_label_2.setText('手臂平面／軀幹角:' if metric else '肩外旋角度:')
+        self.ui.MER_label_2.setText(('手臂平面／軀幹角:' if metric else '肩外旋角度:') + '\n')
         if method != 'legacy' and not self._valid_stereo_frame(self.reference_spin.value()):
             self._calibration_description += ' 初始幀超出雙目同步範圍，後腳位移將無法計算；請調整初始幀。'
         self._calibration_ready = True
@@ -794,8 +795,6 @@ class PoseVideoTabControl(QWidget):
         self.ui.showBboxCheckBox.stateChanged.connect(self.toggleShowBbox)
         
         # 釋放點相關按鈕和複選框
-        if hasattr(self.ui, 'resetBRBtn'):
-            self.ui.resetBRBtn.clicked.connect(self.resetBRPoints)
         if hasattr(self.ui, 'showBR_checkBox'):
             self.ui.showBR_checkBox.stateChanged.connect(self.toggleShowBRPoints)
         # self.ui.showAngleCheckBox.stateChanged.connect(self.toggleShowAngleInfo)
@@ -1161,12 +1160,12 @@ class PoseVideoTabControl(QWidget):
             self.image_drawer.keyframe_shoulder_hip_angle = angle
             self.image_drawer.keyframe_stride_distance = distance
             self.ui.FC_label.setText(formatted(angle) + '\n' + formatted(distance, 100))
-            self.ui.FC_label_unit.setText('deg\ncm')
+            self.ui.FC_label_unit.setText('°\ncm')
         elif keyframe_type == 'max_shoulder_er':
             angle = value('shoulder_angle')
             self.image_drawer.keyframe_shoulder_angle = angle
-            self.ui.MER_label_3.setText(formatted(angle))
-            self.ui.MER_label_unit.setText('deg')
+            self.ui.MER_label_3.setText(formatted(angle) + '\n')
+            self.ui.MER_label_unit.setText('°\n')
         elif keyframe_type == 'release':
             speed = value('wrist_speed')
             distance = self.image_drawer._calculate_extension_distance(frame_num)
@@ -1294,6 +1293,8 @@ class PoseVideoTabControl(QWidget):
     def _updateFrame(self, frame, frame_2, frame_num: int):
         """內部更新幀顯示，直接使用已獲取的圖像數據"""
         if self.viewer3d is not None:
+            self.viewer3d.set_release_point(self.wrist_speed_frame, self.pose_estimater.pitch_hand_id,
+                                            self.show_br_points)
             self.viewer3d.set_frame(frame_num)  # Clear the skeleton when this frame has no valid reconstruction.
             if not getattr(self.viewer3d, 'metric', False) and frame_num not in self.viewer3d.all_3d_frames:
                 for visual in (self.viewer3d.head_lines, self.viewer3d.left_lines,
@@ -1302,9 +1303,9 @@ class PoseVideoTabControl(QWidget):
         drawed_img = self.image_drawer.drawInfo(frame, frame_num, self.pose_estimater.kpt_buffer)
         drawed_img_2 = self.image_drawer_2.drawInfo(frame_2, frame_num, self.pose_estimater_2.kpt_buffer)
         
-        # 如果啟用顯示釋放點，則在 frame_2 上繪製
-        if self.show_br_points and self.br_points:
-            drawed_img_2 = self._draw_br_points(drawed_img_2)
+        if self.show_br_points:
+            drawed_img = draw_release_points(drawed_img, [release_point(self.pose_estimater, self.wrist_speed_frame)])
+            drawed_img_2 = draw_release_points(drawed_img_2, [release_point(self.pose_estimater_2, self.wrist_speed_frame)])
         
         self.showImage(drawed_img, self.view_scene, self.ui.FrameView)
         self.showImage(drawed_img_2, self.curve_scene, self.ui.FrameView_2)
@@ -1532,98 +1533,13 @@ class PoseVideoTabControl(QWidget):
             # 原景模式：顯示全部幀
             self.graph_plotter.zoomIn(0, total_frames)
 
-    def _draw_br_points(self, image: np.ndarray) -> np.ndarray:
-        """在圖像上繪製釋放點 (BR Points)
-        
-        Args:
-            image: 輸入圖像 (H x W x 3, BGR)
-            
-        Returns:
-            繪製後的圖像
-        """
-        if not self.br_points or len(self.br_points) == 0:
-            return image
-        
-        result = image.copy()
-        
-        # 顏色配置
-        COLOR_POINT = (0, 0, 255)        # 紅色 - 個別點
-        COLOR_CENTER = (0, 0, 255)       # 藍色 - 中心位置
-        COLOR_CIRCLE = (255, 255, 255)       # 藍色 - 外圍圓
-        POINT_RADIUS = 10
-        
-        # 繪製每個釋放點
-        for i, point_data in enumerate(self.br_points):
-            if point_data is None or len(point_data) < 2:
-                continue
-            
-            try:
-                x, y = int(point_data[0]), int(point_data[1])
-                
-                # 檢查座標是否在圖像範圍內
-                if 0 <= x < result.shape[1] and 0 <= y < result.shape[0]:
-                    # 繪製點
-                    cv2.circle(result, (x, y), POINT_RADIUS, COLOR_POINT, -1)
-                    # 繪製邊框
-                    cv2.circle(result, (x, y), POINT_RADIUS, COLOR_CIRCLE, 2)
-                    # 繪製序號
-                    cv2.putText(result, str(i+1), (x - 5, y - POINT_RADIUS - 5),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            except (ValueError, TypeError):
-                continue
-        
-        # # 如果有多個點，繪製中心位置
-        # if len(self.br_points) > 1:
-        #     try:
-        #         points_arr = np.array([p[:2] for p in self.br_points if p is not None and len(p) >= 2], dtype=np.float32)
-        #         if len(points_arr) > 0:
-        #             center = np.mean(points_arr, axis=0).astype(int)
-        #             cv2.circle(result, tuple(center), POINT_RADIUS + 3, COLOR_CENTER, -1)
-        #             cv2.circle(result, tuple(center), POINT_RADIUS + 3, (255, 255, 255), 2)
-        #             # 添加統計信息
-        #             cv2.putText(result, f"BR Points: {len(self.br_points)}", (10, 30),
-        #                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        #             cv2.putText(result, f"Center: ({center[0]}, {center[1]})", (10, 60),
-        #                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        #     except (ValueError, TypeError):
-        #         pass
-        # else:
-        #     # 單個點的情況下，显示點數和座標
-        #     if len(self.br_points) == 1 and self.br_points[0] is not None and len(self.br_points[0]) >= 2:
-        #         x, y = int(self.br_points[0][0]), int(self.br_points[0][1])
-        #         cv2.putText(result, f"BR Points: 1", (10, 30),
-        #                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        #         cv2.putText(result, f"Position: ({x}, {y})", (10, 60),
-        #                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        
-        return result
-
-    def resetBRPoints(self):
-        """清除所有釋放點記錄"""
-        reply = QMessageBox.question(
-            self, "確認", "確定要清除所有釋放點 (BR) 記錄嗎?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            self.br_points = []
-            print("✓ 已清除所有釋放點記錄")
-            # 如果當前正在顯示，則刷新畫面
-            if self.show_br_points:
-                self.updateFrame(self.ui.frameSlider.value())
-            QMessageBox.information(self, "成功", "所有釋放點記錄已清除")
-
     def toggleShowBRPoints(self, state: int):
-        """切換顯示釋放點
-        
-        Args:
-            state: 複選框狀態 (2=勾選, 0=未勾選)
-        """
         self.show_br_points = (state == 2)
-        if self.show_br_points:
-            print(f"✓ 顯示釋放點 (共 {len(self.br_points)} 個)")
-        else:
-            print("✓ 隱藏釋放點")
-        self.updateFrame(self.ui.frameSlider.value())
+        if self.viewer3d is not None:
+            self.viewer3d.set_release_point(self.wrist_speed_frame, self.pose_estimater.pitch_hand_id,
+                                            self.show_br_points)
+        if self.video_loader.total_frames:
+            self.updateFrame(self.ui.frameSlider.value())
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

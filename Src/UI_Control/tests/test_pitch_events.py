@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from Src.analysis.pitch_events import detect_pitch_events, PitchEventDetector
+from Src.analysis.PitchingAnalyzer import PitchingAnalyzer
 
 
 def pitch_rows():
@@ -35,6 +36,32 @@ def pitch_rows():
 
 
 class PitchEventTests(unittest.TestCase):
+    def test_live_trigger_uses_opposite_leg_and_throwing_wrist_for_each_hand(self):
+        for hand, knee, wrist, other_knee, other_wrist in (('right', 13, 10, 14, 9), ('left', 14, 9, 13, 10)):
+            detector = PitchingAnalyzer(hand)
+            detector.init_frames = 0
+            p = np.full((26, 4), [300., 500., .95, 0.])
+            p[[11, 12], 1] = 300
+            p[18, 1] = 200
+            p[other_knee, 1] = 200
+            self.assertIsNone(detector.process(p))
+            p[knee, 1], p[knee, 2] = 200, .1
+            self.assertIsNone(detector.process(p))
+            p[knee, 2] = .95
+            self.assertEqual(detector.process(p), 'START')
+            p[15, 0], p[16, 0] = 100, 500
+            p[other_wrist, 1] = 100
+            detector.process(p)
+            self.assertEqual(detector.state, 'KNEEUP')
+            p[wrist, 1] = 100
+            detector.process(p)
+            self.assertEqual(detector.state, 'DELIVERY')
+            p[wrist, 1] = 500
+            detector.process(p)
+            for _ in range(detector.follow_frames - 1):
+                self.assertIsNone(detector.process(p))
+            self.assertEqual(detector.process(p), 'STOP')
+
     def test_ground_contact_and_raised_arm_reject_the_early_false_peaks(self):
         event = detect_pitch_events(pd.DataFrame(pitch_rows()))
         self.assertEqual((event.preparation, event.fc, event.mer, event.br), (2, 10, 15, 17))

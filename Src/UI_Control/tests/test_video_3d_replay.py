@@ -159,6 +159,25 @@ class Video3DTests(unittest.TestCase):
             self.assertAlmostEqual(viewer.displacement(1), .65, places=6)
             self.assertAlmostEqual(viewer.compute_joint_velocity_causal(25, .014, 1), 39., places=5)
 
+    def test_release_checkbox_updates_both_images_and_3d_marker_for_each_hand(self):
+        tab = self.setup_tab()
+        self.run_tab_frames(tab)
+        from Src.UI_Control.rendering.release_points import release_point
+        for wrist in (10, 9):
+            for estimator in (tab.pose_estimater, tab.pose_estimater_2):
+                estimator.setPitchHandId(wrist)
+            with patch.object(tab, 'showImage') as show:
+                tab.ui.showBR_checkBox.setChecked(True)
+                self.assertTrue(tab.viewer3d.release_marker.visible)
+                points = [release_point(estimator, tab.wrist_speed_frame)
+                          for estimator in (tab.pose_estimater, tab.pose_estimater_2)]
+                self.assertNotEqual(points[0], points[1])
+                enabled = [call.args[0].copy() for call in show.call_args_list[-2:]]
+                tab.ui.showBR_checkBox.setChecked(False)
+                self.assertFalse(tab.viewer3d.release_marker.visible)
+                for image, call in zip(enabled, show.call_args_list[-2:]):
+                    self.assertFalse(self.np.array_equal(image, call.args[0]))
+
     def test_rejected_joint_and_degenerate_ray_do_not_crash_other_joints(self):
         viewer = self.viewer()
         xyz, pairs = self.points()
@@ -387,6 +406,11 @@ class Video3DTests(unittest.TestCase):
         tab.show()
         self.app.processEvents()
         views = (tab.ui.FrameView, tab.ui.FrameView_2)
+        self.assertEqual(tab.ui.FC_label_unit.text(), '°\ncm')
+        self.assertEqual(tab.ui.MER_label_unit.text(), '°\n')
+        self.assertEqual(tab.ui.BR_label_unit.text(), 'm/s\ncm')
+        self.assertEqual(tab.ui.MER_label_2.text().count('\n'), 1)
+        self.assertEqual(tab.ui.MER_label_3.text().count('\n'), 1)
         before = [view.geometry() for view in views]
         for frame, thumbnail, button in ((4, tab.ui.fcView, tab.ui.footContact_ptn),
                                          (7, tab.ui.merView, tab.ui.maxER_ptn),
@@ -398,9 +422,11 @@ class Video3DTests(unittest.TestCase):
             self.assertEqual(tab.ui.frameSlider.value(), frame)
             self.assertEqual([view.geometry() for view in views], before)
             tab.ui.frameSlider.setValue(0)
+            tab.is_play = True
             QTest.mouseClick(thumbnail.viewport(), Qt.LeftButton)
             self.app.processEvents()
-            self.assertEqual(tab.ui.frameSlider.value(), frame)
+            self.assertEqual(tab.ui.frameSlider.value(), 0)
+            self.assertTrue(tab.is_play)
             self.assertEqual([view.geometry() for view in views], before)
 
     def test_sidebar_tabs_do_not_resize_video_or_keyframe_rows(self):
