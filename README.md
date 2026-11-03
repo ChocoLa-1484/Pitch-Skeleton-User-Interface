@@ -155,12 +155,16 @@ python Src/UI_Control/main.py
 Db\                      ← 不在 git 裡
 ├─ pretrain\             模型權重
 ├─ Calibration\          相機校正結果
-└─ Record\               錄影與分析結果
-    └─ <日期>_Pitcher<編號>\<時間>_P<球數>\
-        ├─ CF_*.mp4 / CS_*.mp4        正面／側面原始影片
-        ├─ CF_*.json / CS_*.json      骨架偵測結果
-        ├─ *_BRandRapsodo.json        球離手與 Rapsodo 資料
-        └─ calibration.json           錄影當下的校正值
+│   ├─ sessions\         每次校正的照片與紀錄（<日期_時分秒>_<方法>_SN<正面>_SN<側面>）
+│   └─ photos\           「2D 相機」分頁拍的照片（<日期_時分>\cf、cs）
+├─ Record\               投球錄影與分析結果（只放投球）
+│   └─ <日期>_Pitcher<編號>\<時間>_P<球數>\
+│       ├─ CF_*.mp4 / CS_*.mp4        正面／側面原始影片
+│       ├─ CF_*.json / CS_*.json      骨架偵測結果
+│       ├─ *_BRandRapsodo.json        球離手與 Rapsodo 資料
+│       └─ calibration.json           錄影當下的校正值
+├─ ManualRecord\         「2D 相機」分頁手動錄影（<日期_時分>\CF_*.mp4、CS_*.mp4）
+└─ Rapsodo\              Rapsodo 平板擷取與 OCR 輸出
 environment\             環境版本鎖定檔
 Src\UI_Control\          主程式視窗
 Src\calibration\         校正工具（校正中心、木框、雙棒；chessboard_cross：棋盤格；roma：RoMa 外參）

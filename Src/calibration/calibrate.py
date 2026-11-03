@@ -31,8 +31,7 @@ if __name__ == "__main__" and "--manual-coordinates" in sys.argv:
 if __name__ == "__main__" and "--cross" in sys.argv:
     raise SystemExit("十字架工具已移除，請改用 --wood-frame。")
 
-UI_DIR = Path(__file__).resolve().parent
-from Src.paths import CAMERA_CONFIG_DIR
+from Src.paths import CALIB_PHOTO_DIR, CAMERA_CONFIG_DIR
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "True")
 qt_plugins = Path(os.environ.get("CONDA_PREFIX", sys.prefix)) / "Library/plugins/platforms"
 if qt_plugins.is_dir():
@@ -65,6 +64,7 @@ def read_image(file):
 
 
 def write_image(file, image):
+    Path(file).parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(Path(file).suffix, image)
     if not ok:
         raise OSError("無法編碼影像：{}".format(file))
@@ -429,10 +429,8 @@ class CalibrationWindow(QMainWindow):
                 validate_intrinsic(stored[sn])
                 entries[sn] = stored[sn]
         self.roles, self.entries = roles, entries
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        self.session = Path(calib_store.CALIB_DIR) / "sessions" / (stamp + "_wand")
-        for folder in ("cf", "cs", "intrinsic"):
-            (self.session / folder).mkdir(parents=True, exist_ok=True)
+        method = "intrinsic" if self.intrinsic_only.isChecked() else "wand"
+        self.session = Path(calib_store.new_session_dir(method, roles))
         self.names, self.points = [], {"cf": {}, "cs": {}}
         self.index = 0
         self.last_capture_time = None
@@ -730,7 +728,7 @@ class CalibrationWindow(QMainWindow):
 
     def import_pairs(self):
         folder = QFileDialog.getExistingDirectory(self, "選擇內含 cf 與 cs 的校正照片資料夾",
-                                                   str(UI_DIR.parents[1] / "Db/Record/Calibrate_Picture"))
+                                                   str(CALIB_PHOTO_DIR))
         if not folder:
             return
         try:
@@ -741,6 +739,8 @@ class CalibrationWindow(QMainWindow):
             for name in names:
                 for role in ("cf", "cs"):
                     self.check_image_size(read_image(Path(folder) / role / name), role)
+            for role in ("cf", "cs"):
+                (self.session / role).mkdir(parents=True, exist_ok=True)
             for name in names:
                 for role in ("cf", "cs"):
                     shutil.copy2(str(Path(folder) / role / name), str(self.session / role / name))

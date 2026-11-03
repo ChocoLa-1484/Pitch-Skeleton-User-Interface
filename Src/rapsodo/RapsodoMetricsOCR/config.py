@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
@@ -9,7 +11,8 @@ CAPTURE_FPS: int = 1
 # ---------------------------------------------------------------------------
 OUTPUT_JSON_PATH: str = r"C:\rapsodo-metrics-ocr\rapsodo_data.json"
 OUTPUT_JSON_HITTING: str  = r"C:\rapsodo-metrics-ocr\rapsodo_data_hitting.json"
-OUTPUT_JSON_PITCHING: str = r"E:\Pitch-Skeleton-User-Interface_demo_45090\Db\Record\TabletCapture\rapsodo_data_pitching.json"
+# 專案的 Db/Rapsodo/（以本檔位置推算，不寫死磁碟機）
+OUTPUT_JSON_PITCHING: str = str(Path(__file__).resolve().parents[3] / "Db" / "Rapsodo" / "rapsodo_data_pitching.json")
 BACKUP_DIR: str       = r"C:\rapsodo-metrics-ocr\backup"
 LOG_FILE: str         = r"C:\rapsodo-metrics-ocr\rapsodo_ocr.log"
 

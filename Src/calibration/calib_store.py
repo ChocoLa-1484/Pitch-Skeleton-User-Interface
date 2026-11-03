@@ -5,6 +5,8 @@
 
     Db/Calibration/
     ├─ camera_roles.json            哪台是正面、哪台是側面（calib.py 第 4 區產生）
+    ├─ sessions/<日期_時分秒>_<方法>_SN<正面>_SN<側面>/   每次校正的照片與紀錄（new_session_dir）
+    ├─ photos/<日期_時分>/cf、cs/    「2D 相機」分頁拍的照片
     ├─ intrinsic/
     │   ├─ intrinsics_all.json      所有相機內參，以序號為鍵（calib.py）
     │   └─ calib_SN<序號>.npz        單台完整校正資料（calib.py）
@@ -50,6 +52,23 @@ def write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ---------- 校正工作階段 ----------
+
+def new_session_dir(method, serials):
+    """建立 sessions/<日期_時分秒>_<方法>_SN<序號>... 資料夾並回傳路徑。
+
+    只建立資料夾本身；cf/、cs/、intrinsic/ 等子資料夾等到真的寫入時才建立，
+    避免取消的校正留下一堆空資料夾。
+    """
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = "_".join([stamp, method] + ["SN" + str(s) for s in serials if s])
+    path, n = os.path.join(CALIB_DIR, "sessions", name), 2
+    while os.path.exists(path):  # 同一秒開兩次
+        path, n = os.path.join(CALIB_DIR, "sessions", "{}_{}".format(name, n)), n + 1
+    os.makedirs(path)
+    return path
 
 
 # ---------- 相機角色 ----------

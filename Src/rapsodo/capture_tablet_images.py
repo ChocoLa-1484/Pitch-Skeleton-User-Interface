@@ -7,7 +7,7 @@ if __package__ in (None, ""):
 
 import argparse
 import os
-from Src.paths import DB_DIR
+from Src.paths import RAPSODO_DATA_DIR
 import sys
 from collections import deque
 from datetime import datetime
@@ -587,7 +587,7 @@ class TabletImageCaptureThread(QThread):
 def main():
     parser = argparse.ArgumentParser(description="Capture tablet screen crops from camera/video in background thread.")
     parser.add_argument("--source", default="0", help="Camera index (e.g. 0/1) or video path.")
-    parser.add_argument("--output-dir", default=str(DB_DIR / "Record/TabletCapture"), help="Directory to save crops.")
+    parser.add_argument("--output-dir", default=str(RAPSODO_DATA_DIR), help="Directory to save crops.")
     parser.add_argument("--prefix", default="tablet", help="Saved file name prefix.")
     parser.add_argument("--auto-every", type=int, default=30, help="Auto-save every N frames when auto mode is enabled.")
     parser.add_argument("--width", type=int, default=1920, help="Requested capture width for camera source.")

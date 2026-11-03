@@ -14,7 +14,7 @@ from Src.UI_Control.widgets.keyframe_navigation import bind_keyframe_navigation
 import pandas as pd
 import sys
 import os
-from Src.paths import DB_DIR
+from Src.paths import DB_DIR, RAPSODO_DATA_DIR
 import math
 from Src.UI_Control.forms.pitch_ui import Ui_pitch_ui
 from Src.UI_Control.widgets.pitch_layout import align_pitch_layout
@@ -832,7 +832,7 @@ class PosePitchTabControl(QWidget):
         self.tablet_capture_latest_roi_frames = {}
         self.tablet_capture_latest_roi_frames_save = {}
 
-        output_dir = output_dir or str(DB_DIR / "Record/TabletCapture")
+        output_dir = output_dir or str(RAPSODO_DATA_DIR)
         self.tablet_capture_thread = TabletImageCaptureThread(
             output_dir=output_dir,
             prefix=prefix,

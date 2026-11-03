@@ -48,7 +48,7 @@ python .\Src\calibration\calibrate.py
 
 按「開始校正」後，在同一視窗依序完成：正面內參 → 側面內參 → 雙機拍校正桿 → 左右標註 →「計算並儲存校正」。棋盤格每台至少擷取 15 組，校正桿至少 4 組，左右每張依相同球心順序標註 6 點。仍需人工移動校正板／桿及標註球心，不需另開 `main.py`、`01`、`02`。
 
-已校正內參且鏡頭、焦距及影像尺寸／裁切未變時，可勾選「沿用這兩台已有內參」。外參照片也可匯入包含 `cf`、`cs` 的資料夾，兩邊檔名必須相同。完整通過後才更新目前校正檔；每次的原始照片、點位、內參樣本、誤差報告與被取代檔案的備份保存在 `Db\Calibration\sessions\<時間>_wand\`，供之後與棋盤格外參方法比較。這版先實作校正桿方法。
+已校正內參且鏡頭、焦距及影像尺寸／裁切未變時，可勾選「沿用這兩台已有內參」。外參照片也可匯入包含 `cf`、`cs` 的資料夾，兩邊檔名必須相同。完整通過後才更新目前校正檔；每次的原始照片、點位、內參樣本、誤差報告與被取代檔案的備份保存在 `Db\Calibration\sessions\<日期_時分秒>_wand_SN<正面>_SN<側面>\`（只做內參時方法為 `intrinsic`），供之後與棋盤格外參方法比較。這版先實作校正桿方法。
 
 **木框 PnP 外參**：執行 `python Src/calibration/calibrate.py --wood-frame`，引導收集約 15 組照片並儲存最佳一組。**手動原點／XYZ 軸／尺度**：執行 `python Src/calibration/calibrate.py --manual-coordinates`，選擇正面及側面圖片後標註並匯出 JSON。兩種視窗的操作與限制見第 4 節。**雙棒八球 8-point**：執行 `python Src/calibration/calibrate.py --two-rods`，見第 7 節。三種方法也都可以從校正中心（`start_calibrate.bat`）開啟。
 
@@ -75,7 +75,7 @@ python Src/legacy/calibration/03_3d.py                 # 5.（選用）舊尺度
 - 外參照片至少 4 組、每張 6 點，正面與側面必須同名；拍照與標註都在同一視窗。左右 1–6 必須對應同一實體球心。滾輪縮放、Ctrl＋拖曳平移、右鍵撤銷。最後一張不必再切換即可保存。
 - `Src/calibration/calibration_workflow.py` 提供驗證、RANSAC、內點重估、誤差與發布處理。F 方向維持 `x_front^T F x_side = 0`，固定隨機種子；至少 12 內點且比例 ≥ 50% 才接受。門檻預設 3 px、可調，**誤差採左右兩側點到對極線距離的較大值**，與舊 `02` 的單側 1 px 門檻不同，比較報告時須使用一致門檻與資料。
 - 目前 3D 消費端使用原始像素；本工具也維持 `raw_pixels` 的 F，未單獨對外參點去畸變，以免座標系不一致。若日後改成去畸變的棋盤格外參，須同步修改重建端。擬合誤差不能代替獨立尺寸／3D 精度驗證；這版未自動完成舊步驟 6 的 340 mm 尺度驗證。
-- `sessions/<時間>_wand/` 包含 `session.json`（角色、內參快照、棋盤格規格、狀態）、`cf/`、`cs/`、`selected_points_cf.json`、`selected_points_cs.json`、`intrinsic/`、`report.json`。點位逐次保存為草稿，中途取消不改現用值。草稿保留供檢查，尚未提供重開精靈後的自動續作。
+- `sessions/<日期_時分秒>_wand_SN<正面>_SN<側面>/` 包含 `session.json`（角色、內參快照、棋盤格規格、狀態）、`cf/`、`cs/`、`selected_points_cf.json`、`selected_points_cs.json`、`intrinsic/`、`report.json`；`cf/`、`cs/`、`intrinsic/` 有寫入照片時才建立。點位逐次保存為草稿，中途取消不改現用值。草稿保留供檢查，尚未提供重開精靈後的自動續作。
 - 發布前備份被取代的檔案到 session 的 `previous_calibration/`，逐檔以暫存檔取代；遇一般寫入例外會回復本次已取代檔案。這不是跨檔案的斷電交易，請勿同時開多個校正工具寫入。既有錄影快照不受影響。
 - 雙機取像沿用現有 `DualFlirSystem` 的 GPIO 設定，取像／釋放在同一工作執行緒；仍需現場驗證同步線、曝光與影像配對。
 
@@ -96,8 +96,8 @@ python -m unittest discover -s Src/UI_Control/tests -v
 |---|---|---|---|
 | 1. 內參（每台各做一次） | `python Src/calibration/calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
 | 2. 指定正面/側面 | `calib.py` 第 4 區 → 儲存角色 | — | `camera_roles.json` |
-| 3. 拍外參照片 | `python Src/UI_Control/main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Record\Calibrate_Picture\cf\`、`cs\` |
-| 4–5. 標註對應點、算 F 矩陣 | `start_calibrate.bat`（`calibrate.py`）校正桿流程：左右各點 6 個球心 → RANSAC 求 F（原 `01`、`02` 已整合並刪除） | — | `extrinsic\selected_points_*.json`、`extrinsicundamental.json` |
+| 3. 拍外參照片 | `python Src/UI_Control/main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Calibration\photos\<日期_時分>\cf\`、`cs\`（每次開相機一個資料夾） |
+| 4–5. 標註對應點、算 F 矩陣 | `start_calibrate.bat`（`calibrate.py`）校正桿流程：左右各點 6 個球心 → RANSAC 求 F（原 `01`、`02` 已整合並刪除） | — | `extrinsic\selected_points_*.json`、`extrinsic\fundamental.json` |
 | 6. 驗證 | `python Src/legacy/calibration/03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |
 
 **注意事項**
@@ -501,7 +501,7 @@ python Src/calibration/calibrate_two_rods.py
 3. 提取沿用 `extract_fluorescent_balls` 使用的 `fluorescent_balls.detect_balls`，不需先執行 CLI 或產生提取 JSON。設定頁可調整 HSV、最小半徑與面積；標記頁可按「調整提取參數」重試本組。
 4. 以去畸變球心的共線性與四點交比提出 A/B 分組。四點交比不能識別整根棒子的倒序，**必須核對兩張照片的實體 A/B 棒與上下編號**；A1/B1 始終指同一個實體上端，不能隨照片上的位置重新編號。可反轉指定視角某根棒子的順序，或選球號後手動點選球心。每組按「確認本組兩視角球號」；修改或重新提取後須再次確認。
 5. 補拍提示依已收集、未略過的球心計算：各影像的棒子中心九宮格涵蓋、直立／斜向／接近水平投影角度，以及同一根棒在不同照片中的影像長度變化。A/B 棒在單張照片中的大小差異不算遠近變化。請在共同可見的量測區改變位置、方向、距離與前後傾斜，避免球互相遮擋。影像大小變化也可能受傾斜影響，不能當作真實深度或三維角度的量測。涵蓋提示不強制要求拍到兩相機無法共同看見的區域。
-6. 至少完成並確認 15 組不同姿態才可計算。計算前會檢查重複姿態：若兩視角對應球心的 RMS 位移都不超過 1 px，即使檔名不同仍拒收，避免重複照片同時進入擬合與保留驗證。依提示取消重複組的「採用這組」，再改變棒子位置或角度補拍。原圖與草稿保存於 `Db/Calibration/sessions/<時間>_two_rods/session.json`，可從設定頁讀回。
+6. 至少完成並確認 15 組不同姿態才可計算。計算前會檢查重複姿態：若兩視角對應球心的 RMS 位移都不超過 1 px，即使檔名不同仍拒收，避免重複照片同時進入擬合與保留驗證。依提示取消重複組的「採用這組」，再改變棒子位置或角度補拍。原圖與草稿保存於 `Db/Calibration/sessions/<日期_時分秒>_two_rods_SN<正面>_SN<側面>/session.json`，可從設定頁讀回。
 7. 約 80% 組別用於外參與尺度擬合，約 20%（每第 5 組）保留檢查。RANSAC 選內點，normalized 8-point 估計 F，再求 E、判定正深度及極線最佳化；以每根棒子內的已知距離恢復毫米尺度。**不假設兩根棒子間距固定，也不使用 PnP。** 結果列出各組重投影及棒長誤差；退化幾何、錯配、尺度不一致或保留組驗證不佳會拒絕輸出。
 8. 工作階段自動保存 `stereo.json`；另按「匯出 8-point 外參」可存至預設 `Db/Calibration/two_rods/stereo.json`。主程式「3D → 校正設定」選 **8Points**，選取此檔後套用。此工具不改寫舊 F 矩陣或錄影快照。
 

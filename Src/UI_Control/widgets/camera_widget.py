@@ -12,7 +12,7 @@ import numpy as np
 import sys
 import cv2
 import os
-from Src.paths import DB_DIR
+from Src.paths import CALIB_PHOTO_DIR, MANUAL_RECORD_DIR
 from Src.UI_Control.forms.camera_ui import Ui_camera_ui
 from datetime import datetime
 from Src.cameras.video_control import Camera
@@ -107,6 +107,7 @@ class PoseCameraTabControl(QWidget):
         self.camera_scene_2 = QGraphicsScene()
         self.last_frame_cf = None
         self.last_frame_cs = None
+        self.photo_dir = None  # 每次開相機的照片放同一個資料夾（同一個機位）
 
     def bindUI(self):
         """Bind UI elements to their corresponding functions."""
@@ -142,7 +143,8 @@ class PoseCameraTabControl(QWidget):
     def startRecording(self):
         """Start recording the video."""
         current_time = datetime.now().strftime("%Y%m%d_%H%M")
-        output_dir = f'{DB_DIR.as_posix()}/Record/C{self.ui.CameraIdInput.value()}_Fps120_{current_time}'
+        # 手動錄影不是投球資料，放在 Record 之外；實際幀率以影片本身為準
+        output_dir = f'{MANUAL_RECORD_DIR.as_posix()}/{current_time}'
         os.makedirs(output_dir, exist_ok=True)
         thread = self.camera.video_thread
         if thread is not None:
