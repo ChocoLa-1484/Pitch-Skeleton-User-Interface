@@ -10,19 +10,33 @@ plugin_path = Path(sys.prefix) / "Library/plugins/platforms"
 if plugin_path.is_dir():
     os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", str(plugin_path))
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout,
-                             QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget)
+                             QCheckBox, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget)
 from Src.cameras.flir_preview import PreviewService
 
 
 class CameraTile(QFrame):
+    acquisition_changed = pyqtSignal(bool)
+    preview_changed = pyqtSignal(bool)
+
     def __init__(self, serial):
         super().__init__()
         self.setObjectName("tile")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("FLIR  ·  SN %s" % serial))
+        switches = QHBoxLayout()
+        self.acquisition = QCheckBox("接收資料")
+        self.preview = QCheckBox("顯示畫面")
+        for control in (self.acquisition, self.preview):
+            control.setChecked(True)
+            switches.addWidget(control)
+        self.acquisition.setToolTip("停止該台相機取像；重新啟用會重新計算幀數與 FPS")
+        self.preview.setToolTip("只關閉預覽轉色與繪圖，接收及 FPS 統計繼續")
+        self.acquisition.toggled.connect(self.acquisition_changed.emit)
+        self.preview.toggled.connect(self.preview_changed.emit)
+        layout.addLayout(switches)
         self.image = QLabel("連線中…")
         self.image.setAlignment(Qt.AlignCenter)
         self.image.setMinimumSize(160, 90)
@@ -36,6 +50,12 @@ class CameraTile(QFrame):
 
     def display(self, frame, fps, status, stats=None):
         stats = stats or {}
+        receiving = stats.get("acquisition_enabled", True)
+        showing = stats.get("preview_enabled", True)
+        for control, checked in ((self.acquisition, receiving), (self.preview, showing)):
+            control.blockSignals(True)
+            control.setChecked(checked)
+            control.blockSignals(False)
         self.info.setToolTip(status + "\n上次中斷：" + stats.get("last_disconnect", "無"))
         configured = stats.get("configured_fps")
         rate = "未知" if configured is None else "%.1f" % configured
@@ -47,9 +67,10 @@ class CameraTile(QFrame):
              stats.get("incomplete", 0), stats.get("gaps", 0),
              stats.get("errors", 0), stats.get("elapsed", 0), rate,
              stats.get("reconnects", 0), status[:90]))
-        if frame is None:
+        if frame is None or not receiving or not showing:
             self.image.clear()
-            self.image.setText("等待攝影機影像")
+            self.image.setText("接收已關閉" if not receiving else
+                               "畫面已關閉 · 接收繼續" if not showing else "等待攝影機影像")
             return
         height, width, _ = frame.shape
         image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_RGB888)
@@ -120,6 +141,10 @@ class PreviewWindow(QMainWindow):
                 self.grid.setRowStretch(index, int(index < (len(serials) + columns - 1) // columns))
             for index, serial in enumerate(serials):
                 tile = self.tiles[serial] = CameraTile(serial)
+                tile.acquisition_changed.connect(
+                    lambda enabled, sn=serial: self.service.set_enabled(sn, acquisition=enabled))
+                tile.preview_changed.connect(
+                    lambda enabled, sn=serial: self.service.set_enabled(sn, preview=enabled))
                 self.grid.addWidget(tile, index // columns, index % columns)
         self.empty.setVisible(not serials)
         self.status.setText(message)

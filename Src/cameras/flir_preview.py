@@ -44,25 +44,42 @@ class CameraStream(threading.Thread):
         self.received = self.incomplete = self.gaps = self.errors = 0
         self.last_id = None
         self.started = None
+        self.stopped_at = None
         self.arrivals = deque()
         self.configured_fps = None
         self.preview_error = ""
         self.preview_condition = threading.Condition()
         self.pending = None
         self.preview_done = False
+        self.preview_enabled = threading.Event()
+        self.preview_enabled.set()
+
+    def set_preview_enabled(self, enabled):
+        if enabled:
+            self.preview_enabled.set()
+        else:
+            self.preview_enabled.clear()
+            with self.preview_condition:
+                self.pending = None
+            with self.lock:
+                self.frame = None
+                self.preview_error = ""
 
     def snapshot(self):
         with self.lock:
             now = time.monotonic()
             while self.arrivals and self.arrivals[0] <= now - 2:
                 self.arrivals.popleft()
-            elapsed = now - self.started if self.started is not None else 0
+            elapsed = (self.stopped_at or now) - self.started if self.started is not None else 0
             fps = len(self.arrivals) / min(2, elapsed) if elapsed > 0 else 0
+            if self.stopped_at is not None:
+                fps = 0
             stats = dict(received=self.received, incomplete=self.incomplete,
                          gaps=self.gaps, errors=self.errors, elapsed=elapsed,
                          average=self.received / elapsed if elapsed > 0 else 0,
                          configured_fps=self.configured_fps)
-            return self.frame, fps, self.preview_error or self.status, stats
+            error = self.preview_error if self.preview_enabled.is_set() else ""
+            return self.frame, fps, error or self.status, stats
 
     def publish(self, frame=None, fps=0.0, status="即時畫面"):
         with self.lock:
@@ -84,8 +101,9 @@ class CameraStream(threading.Thread):
                     frame = converted.GetNDArray().copy()
                     del converted
                     with self.lock:
-                        self.frame = frame
-                        self.preview_error = ""
+                        if self.preview_enabled.is_set():
+                            self.frame = frame
+                            self.preview_error = ""
                 except Exception as exc:
                     with self.lock:
                         self.preview_error = "預覽轉換失敗（接收繼續）：%s" % exc
@@ -142,13 +160,14 @@ class CameraStream(threading.Thread):
                                 self.arrivals.popleft()
                             self.status = "接收中"
                     failures = 0
-                    if not incomplete and now >= next_preview:
+                    if self.preview_enabled.is_set() and not incomplete and now >= next_preview:
                         # DeepCopy before Release, then convert on a separate thread.
                         preview = sdk.Image.Create()
                         preview.DeepCopy(image)
                         with self.preview_condition:
-                            self.pending = preview
-                            self.preview_condition.notify()
+                            if self.preview_enabled.is_set():
+                                self.pending = preview
+                                self.preview_condition.notify()
                         next_preview = now + 1 / 30
                 except Exception as exc:
                     with self.lock:
@@ -164,6 +183,8 @@ class CameraStream(threading.Thread):
         except Exception as exc:
             self.publish(status="無法開啟：%s" % exc)
         finally:
+            with self.lock:
+                self.stopped_at = time.monotonic()
             with self.preview_condition:
                 self.preview_done = True
                 self.preview_condition.notify()
@@ -192,19 +213,46 @@ class PreviewService(threading.Thread):
         self.wake = threading.Event()
         self.lock = threading.Lock()
         self.streams = {}
+        self.connected = []
+        self.preferences = {}
         self.connection_attempts = {}
         self.last_disconnect = {}
         self.message = "正在偵測 FLIR 攝影機…"
 
+    def set_enabled(self, serial, acquisition=None, preview=None):
+        """GUI-safe request; only the worker performs SDK stop/start operations."""
+        with self.lock:
+            options = self.preferences.setdefault(serial, {"acquisition": True, "preview": True})
+            if acquisition is not None:
+                options["acquisition"] = bool(acquisition)
+            if preview is not None:
+                options["preview"] = bool(preview)
+            stream = self.streams.get(serial)
+            if stream is not None:
+                stream.set_preview_enabled(options["preview"])
+                if not options["acquisition"]:
+                    stream.stop_event.set()
+        self.wake.set()
+
     def snapshot(self):
         with self.lock:
             snapshots = {}
-            for sn, stream in self.streams.items():
-                frame, fps, status, stats = stream.snapshot()
+            for sn in self.connected:
+                stream = self.streams.get(sn)
+                frame, fps, status, stats = stream.snapshot() if stream else (None, 0, "等待啟動", {})
+                options = self.preferences.get(sn, {"acquisition": True, "preview": True})
+                stats["acquisition_enabled"] = options["acquisition"]
+                stats["preview_enabled"] = options["preview"]
+                if not options["acquisition"]:
+                    frame, fps = None, 0
+                    status = "正在停止接收…" if stream and stream.is_alive() else "接收已關閉"
+                elif not options["preview"]:
+                    frame = None
                 stats["reconnects"] = max(0, self.connection_attempts.get(sn, 1) - 1)
                 stats["last_disconnect"] = self.last_disconnect.get(sn, "")
                 snapshots[sn] = frame, fps, status, stats
-            return snapshots, self.message
+            enabled = sum(snapshot[3]["acquisition_enabled"] for snapshot in snapshots.values())
+            return snapshots, self.message + " · 接收啟用 %d / %d 台" % (enabled, len(snapshots))
 
     def stop(self):
         self.stop_event.set()
@@ -213,6 +261,9 @@ class PreviewService(threading.Thread):
     def reconcile(self, cameras):
         """Keep existing streams stable as cameras arrive or disappear."""
         with self.lock:
+            self.connected = [sn for sn in self.connected if sn in cameras]
+            self.connected += [sn for sn in sorted(cameras) if sn not in self.connected][:5 - len(self.connected)]
+            selected = list(self.connected)
             current = dict(self.streams)
         for serial, stream in current.items():
             if serial not in cameras:
@@ -221,21 +272,29 @@ class PreviewService(threading.Thread):
                 with self.lock:
                     self.streams.pop(serial, None)
                     self.last_disconnect[serial] = "偵測不到攝影機"
-        for serial in sorted(cameras):
+        for serial in selected:
             with self.lock:
                 old = self.streams.get(serial)
-                full = len(self.streams) >= 5
+                options = self.preferences.get(serial, {"acquisition": True, "preview": True})
+                if not options["acquisition"]:
+                    if old is not None:
+                        old.stop_event.set()
+                    continue
             if old is not None and old.is_alive():
-                continue
-            if old is None and full:
                 continue
             stream = CameraStream(cameras[serial], self.sdk)
             with self.lock:
-                if old is not None:
+                # Re-read after construction in case the GUI changed a switch.
+                options = self.preferences.get(serial, {"acquisition": True, "preview": True})
+                if not options["acquisition"]:
+                    continue
+                stream.set_preview_enabled(options["preview"])
+                if old is not None and not old.stop_event.is_set():
                     self.last_disconnect[serial] = old.snapshot()[2]
-                self.connection_attempts[serial] = self.connection_attempts.get(serial, 0) + 1
+                if old is None or not old.stop_event.is_set():
+                    self.connection_attempts[serial] = self.connection_attempts.get(serial, 0) + 1
                 self.streams[serial] = stream
-            stream.start()
+                stream.start()
         with self.lock:
             self.message = ("已偵測 %d 台 · 最多顯示 5 台 · 各台獨立擷取" % len(cameras)
                             if cameras else "尚未偵測到攝影機，接上 FLIR 後會自動顯示")

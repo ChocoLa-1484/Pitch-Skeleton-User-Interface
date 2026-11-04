@@ -16,9 +16,10 @@ class FakeStream:
         self.stop_event = threading.Event()
         self.alive = False
     def start(self): self.alive = True
-    def is_alive(self): return self.alive
+    def is_alive(self): return self.alive and not self.stop_event.is_set()
     def join(self): self.alive = False
     def snapshot(self): return None, 0, "waiting", {}
+    def set_preview_enabled(self, enabled): self.preview_enabled = enabled
 
 
 class PreviewTests(unittest.TestCase):
@@ -104,6 +105,7 @@ class PreviewTests(unittest.TestCase):
         clock = [100.0]
         count = [0]
         capture_finished = threading.Event()
+        measured = []
         converted = MagicMock()
         converted.GetNDArray.return_value = np.zeros((12, 16, 3), dtype=np.uint8)
         def slow_conversion(*args):
@@ -121,13 +123,16 @@ class PreviewTests(unittest.TestCase):
             return image
         def release():
             if count[0] == 360:
+                measured.append(worker.snapshot())
                 capture_finished.set()
                 worker.stop_event.set()
         camera.GetNextImage.side_effect = receive
         image.Release.side_effect = release
         with patch("Src.cameras.flir_preview.time.monotonic", side_effect=lambda: clock[0]):
             worker.run()
-            preview, fps, status, stats = worker.snapshot()
+            preview, stopped_fps, status, _ = worker.snapshot()
+            _, fps, _, stats = measured[0]
+            self.assertEqual(stopped_fps, 0)
             self.assertIsNotNone(preview)
             self.assertNotIn("失敗", status)
             self.assertAlmostEqual(fps, 180)
@@ -139,6 +144,70 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(image.Release.call_count, 360)
             clock[0] += 3
             self.assertEqual(worker.snapshot()[1], 0)
+
+    def test_five_connected_four_receiving_and_preferences_survive_hotplug(self):
+        service = PreviewService(sdk=object())
+        cameras = {str(i): object() for i in range(5)}
+        with patch("Src.cameras.flir_preview.CameraStream", FakeStream):
+            service.reconcile(cameras)
+            others = {sn: service.streams[sn] for sn in ("0", "1", "2", "3")}
+            disabled = service.streams["4"]
+            service.set_enabled("4", acquisition=False, preview=False)
+            for _ in range(3):
+                service.reconcile(cameras)
+            self.assertEqual(len(service.snapshot()[0]), 5)
+            self.assertEqual(sum(stream.is_alive() for stream in service.streams.values()), 4)
+            self.assertIs(service.streams["4"], disabled)
+            self.assertFalse(service.snapshot()[0]["4"][3]["acquisition_enabled"])
+            service.reconcile({sn: camera for sn, camera in cameras.items() if sn != "4"})
+            service.reconcile(cameras)
+            self.assertNotIn("4", service.streams)
+            self.assertIn("4", service.snapshot()[0])
+            service.set_enabled("4", acquisition=True)
+            service.reconcile(cameras)
+            self.assertTrue(service.streams["4"].is_alive())
+            self.assertFalse(service.streams["4"].preview_enabled)
+            for sn, stream in others.items():
+                self.assertIs(service.streams[sn], stream)
+
+    def test_hidden_preview_keeps_receiving_without_copy_or_conversion(self):
+        sdk, camera = self.make_camera()
+        worker = CameraStream(camera, sdk)
+        worker.set_preview_enabled(False)
+        image = camera.GetNextImage.return_value
+        image.IsIncomplete.return_value = False
+        count = [0]
+        def release():
+            count[0] += 1
+            if count[0] == 10:
+                worker.stop_event.set()
+        image.Release.side_effect = release
+        worker.run()
+        self.assertEqual(worker.snapshot()[3]["received"], 10)
+        self.assertIsNone(worker.snapshot()[0])
+        sdk.Image.Create.assert_not_called()
+        sdk.ImageProcessor.return_value.Convert.assert_not_called()
+        camera.EndAcquisition.assert_called_once()
+
+    def test_toggle_ui_targets_correct_camera(self):
+        app = QApplication.instance() or QApplication([])
+        service = MagicMock()
+        service.is_alive.return_value = False
+        service.snapshot.return_value = ({str(i): (None, 180, "live", {}) for i in range(5)}, "ok")
+        window = PreviewWindow(service)
+        window.refresh()
+        tile = window.tiles["4"]
+        tile.preview.click()
+        service.set_enabled.assert_called_with("4", preview=False)
+        tile.acquisition.click()
+        service.set_enabled.assert_called_with("4", acquisition=False)
+        service.set_enabled.reset_mock()
+        tile.display(None, 0, "接收已關閉", {"acquisition_enabled": False, "preview_enabled": False})
+        self.assertFalse(tile.acquisition.isChecked())
+        self.assertFalse(tile.preview.isChecked())
+        self.assertIn("接收已關閉", tile.image.text())
+        service.set_enabled.assert_not_called()
+        window.close()
 
     def test_incomplete_frames_and_gaps_are_separate(self):
         sdk, camera = self.make_camera()
