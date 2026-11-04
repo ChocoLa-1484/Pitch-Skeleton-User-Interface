@@ -2,6 +2,7 @@
 import logging
 import threading
 import time
+from collections import deque
 
 
 class CameraStream(threading.Thread):
@@ -11,48 +12,118 @@ class CameraStream(threading.Thread):
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
         self.frame, self.fps, self.status = None, 0.0, "連線中…"
+        self.received = self.incomplete = self.gaps = self.errors = 0
+        self.last_id = None
+        self.started = None
+        self.arrivals = deque()
+        self.configured_fps = None
+        self.preview_error = ""
+        self.preview_condition = threading.Condition()
+        self.pending = None
+        self.preview_done = False
 
     def snapshot(self):
         with self.lock:
-            return self.frame, self.fps, self.status
+            now = time.monotonic()
+            while self.arrivals and self.arrivals[0] <= now - 2:
+                self.arrivals.popleft()
+            elapsed = now - self.started if self.started is not None else 0
+            fps = len(self.arrivals) / min(2, elapsed) if elapsed > 0 else 0
+            stats = dict(received=self.received, incomplete=self.incomplete,
+                         gaps=self.gaps, errors=self.errors, elapsed=elapsed,
+                         average=self.received / elapsed if elapsed > 0 else 0,
+                         configured_fps=self.configured_fps)
+            return self.frame, fps, self.preview_error or self.status, stats
 
     def publish(self, frame=None, fps=0.0, status="即時畫面"):
         with self.lock:
             self.frame, self.fps, self.status = frame, fps, status
 
+    def convert_previews(self):
+        """Convert only sampled copies; never retain a camera-owned buffer."""
+        try:
+            processor = self.sdk.ImageProcessor()
+            processor.SetColorProcessing(self.sdk.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
+            while True:
+                with self.preview_condition:
+                    self.preview_condition.wait_for(lambda: self.pending is not None or self.preview_done)
+                    image, self.pending = self.pending, None
+                    if image is None:
+                        return
+                try:
+                    converted = processor.Convert(image, self.sdk.PixelFormat_RGB8)
+                    frame = converted.GetNDArray().copy()
+                    del converted
+                    with self.lock:
+                        self.frame = frame
+                        self.preview_error = ""
+                except Exception as exc:
+                    with self.lock:
+                        self.preview_error = "預覽轉換失敗（接收繼續）：%s" % exc
+                finally:
+                    del image
+        except Exception as exc:
+            with self.lock:
+                self.preview_error = "無法啟動預覽轉換：%s" % exc
+
     def run(self):
         cam, sdk = self.camera, self.sdk
         initialized = streaming = False
+        converter = None
         try:
             cam.Init()
             initialized = True
             cam.TriggerMode.SetValue(sdk.TriggerMode_Off)
             cam.AcquisitionMode.SetValue(sdk.AcquisitionMode_Continuous)
             node = sdk.CEnumerationPtr(cam.GetTLStreamNodeMap().GetNode("StreamBufferHandlingMode"))
-            node.SetIntValue(node.GetEntryByName("NewestOnly").GetValue())
-            processor = sdk.ImageProcessor()
-            processor.SetColorProcessing(sdk.SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR)
+            node.SetIntValue(node.GetEntryByName("OldestFirst").GetValue())
+            # Observe the existing camera configuration, without changing exposure/rate.
+            try:
+                rate = cam.AcquisitionFrameRate
+                if sdk.IsReadable(rate):
+                    self.configured_fps = float(rate.GetValue())
+            except Exception:
+                pass
             cam.BeginAcquisition()
             streaming = True
-            last = time.monotonic()
-            frames, fps, failures = 0, 0.0, 0
+            with self.lock:
+                self.started = time.monotonic()
+            converter = threading.Thread(target=self.convert_previews, daemon=True)
+            converter.start()
+            next_preview, failures = 0.0, 0
             while not self.stop_event.is_set():
                 image = None
                 try:
                     image = cam.GetNextImage(1000)
-                    if image.IsIncomplete():
-                        raise RuntimeError("影像不完整（狀態 %s）" % image.GetImageStatus())
-                    converted = processor.Convert(image, sdk.PixelFormat_RGB8)
-                    frame = converted.GetNDArray().copy()
-                    del converted
-                    frames += 1
                     now = time.monotonic()
-                    if now - last >= 1:
-                        fps, frames, last = frames / (now - last), 0, now
-                    self.publish(frame, fps)
+                    incomplete = image.IsIncomplete()
+                    frame_id = int(image.GetFrameID())
+                    with self.lock:
+                        if self.last_id is not None and frame_id > self.last_id:
+                            self.gaps += max(0, frame_id - self.last_id - 1)
+                        self.last_id = frame_id
+                        if incomplete:
+                            self.incomplete += 1
+                            self.status = "影像不完整（狀態 %s）" % image.GetImageStatus()
+                        else:
+                            self.received += 1
+                            self.arrivals.append(now)
+                            while self.arrivals and self.arrivals[0] <= now - 2:
+                                self.arrivals.popleft()
+                            self.status = "接收中"
                     failures = 0
+                    if not incomplete and now >= next_preview:
+                        # DeepCopy before Release, then convert on a separate thread.
+                        preview = sdk.Image.Create()
+                        preview.DeepCopy(image)
+                        with self.preview_condition:
+                            self.pending = preview
+                            self.preview_condition.notify()
+                        next_preview = now + 1 / 30
                 except Exception as exc:
-                    self.publish(status="等待影像：%s" % exc)
+                    with self.lock:
+                        self.errors += 1
+                        self.status = "等待影像：%s" % exc
                     failures += 1
                     if failures >= 3:
                         break
@@ -60,11 +131,15 @@ class CameraStream(threading.Thread):
                 finally:
                     if image is not None:
                         image.Release()
-                # Preview only: cap conversion work and use the newest SDK buffer.
-                self.stop_event.wait(1 / 30)
         except Exception as exc:
             self.publish(status="無法開啟：%s" % exc)
         finally:
+            with self.preview_condition:
+                self.preview_done = True
+                self.preview_condition.notify()
+            if converter is not None:
+                converter.join()
+            self.pending = None
             if streaming:
                 try:
                     cam.EndAcquisition()
@@ -87,11 +162,19 @@ class PreviewService(threading.Thread):
         self.wake = threading.Event()
         self.lock = threading.Lock()
         self.streams = {}
+        self.connection_attempts = {}
+        self.last_disconnect = {}
         self.message = "正在偵測 FLIR 攝影機…"
 
     def snapshot(self):
         with self.lock:
-            return {sn: stream.snapshot() for sn, stream in self.streams.items()}, self.message
+            snapshots = {}
+            for sn, stream in self.streams.items():
+                frame, fps, status, stats = stream.snapshot()
+                stats["reconnects"] = max(0, self.connection_attempts.get(sn, 1) - 1)
+                stats["last_disconnect"] = self.last_disconnect.get(sn, "")
+                snapshots[sn] = frame, fps, status, stats
+            return snapshots, self.message
 
     def stop(self):
         self.stop_event.set()
@@ -107,6 +190,7 @@ class PreviewService(threading.Thread):
                 stream.join()
                 with self.lock:
                     self.streams.pop(serial, None)
+                    self.last_disconnect[serial] = "偵測不到攝影機"
         for serial in sorted(cameras):
             with self.lock:
                 old = self.streams.get(serial)
@@ -117,6 +201,9 @@ class PreviewService(threading.Thread):
                 continue
             stream = CameraStream(cameras[serial], self.sdk)
             with self.lock:
+                if old is not None:
+                    self.last_disconnect[serial] = old.snapshot()[2]
+                self.connection_attempts[serial] = self.connection_attempts.get(serial, 0) + 1
                 self.streams[serial] = stream
             stream.start()
         with self.lock:

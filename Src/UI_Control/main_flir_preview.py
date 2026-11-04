@@ -31,21 +31,31 @@ class CameraTile(QFrame):
         layout.addWidget(self.image, 1)
         self.info = QLabel()
         self.info.setWordWrap(True)
-        self.info.setMaximumHeight(52)
+        self.info.setMinimumHeight(110)
         layout.addWidget(self.info)
 
-    def display(self, frame, fps, status):
-        self.info.setToolTip(status)
+    def display(self, frame, fps, status, stats=None):
+        stats = stats or {}
+        self.info.setToolTip(status + "\n上次中斷：" + stats.get("last_disconnect", "無"))
+        configured = stats.get("configured_fps")
+        rate = "未知" if configured is None else "%.1f" % configured
+        self.info.setText(
+            "接收 %.1f FPS / 目標 180  ·  平均 %.1f FPS\n"
+            "完整 %d 幀  ·  不完整 %d  ·  跳號 %d\n"
+            "取像錯誤 %d  ·  已測 %.0f 秒  ·  設定 %s FPS\n重連 %d 次 · %s" %
+            (fps, stats.get("average", 0), stats.get("received", 0),
+             stats.get("incomplete", 0), stats.get("gaps", 0),
+             stats.get("errors", 0), stats.get("elapsed", 0), rate,
+             stats.get("reconnects", 0), status[:90]))
         if frame is None:
             self.image.clear()
             self.image.setText("等待攝影機影像")
-            self.info.setText(status[:180])
             return
         height, width, _ = frame.shape
         image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_RGB888)
         self.image.setPixmap(QPixmap.fromImage(image).scaled(
             self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        self.info.setText("● 即時畫面    %.1f FPS    %d × %d" % (fps, width, height))
+        self.image.setToolTip("%d × %d · 預覽上限 30 FPS" % (width, height))
 
 
 class PreviewWindow(QMainWindow):
@@ -68,7 +78,8 @@ class PreviewWindow(QMainWindow):
         self.scan.clicked.connect(self.service.wake.set)
         header.addWidget(self.scan)
         layout.addLayout(header)
-        layout.addWidget(QLabel("接上即顯示 · 1–5 台 · 獨立預覽（未同步）"))
+        layout.addWidget(QLabel("1–5 台 · 全速接收統計 · 預覽上限 30 FPS · 未同步"))
+        layout.addWidget(QLabel("接收 FPS 為最近 2 秒完整影格；設定值不代表實收。跳號可能來自傳輸或主機緩衝，重連會重計。"))
         self.empty = QLabel("等待 FLIR 攝影機\n接上 USB 或網路後，畫面會自動出現")
         self.empty.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.empty, 1)
@@ -87,7 +98,7 @@ class PreviewWindow(QMainWindow):
         """)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(50)
+        self.timer.start(34)
         self.service.start()
 
     def refresh(self):
