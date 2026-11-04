@@ -119,7 +119,7 @@ class CameraStream(threading.Thread):
                         with self.preview_condition:
                             self.pending = preview
                             self.preview_condition.notify()
-                        next_preview = now + 1 / 30
+                        next_preview = now + 1 / 60
                 except Exception as exc:
                     with self.lock:
                         self.errors += 1

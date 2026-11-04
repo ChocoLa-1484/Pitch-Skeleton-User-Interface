@@ -72,7 +72,7 @@ class PreviewTests(unittest.TestCase):
         self.assertTrue(worker.snapshot()[0].all())
         camera.TriggerMode.SetValue.assert_called_once_with(sdk.TriggerMode_Off)
 
-    def test_full_rate_receiving_samples_only_thirty_previews_per_second(self):
+    def test_full_rate_receiving_samples_only_sixty_previews_per_second(self):
         sdk, camera = MagicMock(), MagicMock()
         worker = CameraStream(camera, sdk)
         clock = [100.0]
@@ -108,8 +108,8 @@ class PreviewTests(unittest.TestCase):
             self.assertAlmostEqual(stats["average"], 180)
             self.assertEqual(stats["received"], 360)
             self.assertEqual(stats["gaps"], 0)
-            self.assertLessEqual(sdk.Image.Create.call_count, 60)
-            self.assertGreater(sdk.Image.Create.call_count, 45)
+            self.assertLessEqual(sdk.Image.Create.call_count, 120)
+            self.assertGreater(sdk.Image.Create.call_count, 90)
             self.assertEqual(image.Release.call_count, 360)
             clock[0] += 3
             self.assertEqual(worker.snapshot()[1], 0)

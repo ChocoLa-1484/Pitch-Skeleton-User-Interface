@@ -55,7 +55,7 @@ class CameraTile(QFrame):
         image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_RGB888)
         self.image.setPixmap(QPixmap.fromImage(image).scaled(
             self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        self.image.setToolTip("%d × %d · 預覽上限 30 FPS" % (width, height))
+        self.image.setToolTip("%d × %d · 預覽上限 60 FPS" % (width, height))
 
 
 class PreviewWindow(QMainWindow):
@@ -78,7 +78,7 @@ class PreviewWindow(QMainWindow):
         self.scan.clicked.connect(self.service.wake.set)
         header.addWidget(self.scan)
         layout.addLayout(header)
-        layout.addWidget(QLabel("1–5 台 · 全速接收統計 · 預覽上限 30 FPS · 未同步"))
+        layout.addWidget(QLabel("1–5 台 · 全速接收統計 · 預覽上限 60 FPS · 未同步"))
         layout.addWidget(QLabel("接收 FPS 為最近 2 秒完整影格；設定值不代表實收。跳號可能來自傳輸或主機緩衝，重連會重計。"))
         self.empty = QLabel("等待 FLIR 攝影機\n接上 USB 或網路後，畫面會自動出現")
         self.empty.setAlignment(Qt.AlignCenter)
@@ -98,7 +98,8 @@ class PreviewWindow(QMainWindow):
         """)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(34)
+        self.timer.setTimerType(Qt.PreciseTimer)
+        self.timer.start(17)
         self.service.start()
 
     def refresh(self):
