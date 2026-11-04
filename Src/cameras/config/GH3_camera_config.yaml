@@ -1,6 +1,6 @@
 camera_settings:
   width: 1920
-  height: 1084
+  height: 1080
   offset_x: 0
   offset_y: 58
   pixel_format: BayerRG8
