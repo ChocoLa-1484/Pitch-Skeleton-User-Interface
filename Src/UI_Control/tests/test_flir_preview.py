@@ -5,7 +5,7 @@ import threading
 import unittest
 from unittest.mock import MagicMock, patch
 import numpy as np
-from Src.cameras.flir_preview import CameraStream, PreviewService
+from Src.cameras.flir_preview import CameraStream, PreviewService, configure_preview_resolution
 from Src.UI_Control.main_flir_preview import PreviewWindow
 from PyQt5.QtWidgets import QApplication
 
@@ -22,6 +22,32 @@ class FakeStream:
 
 
 class PreviewTests(unittest.TestCase):
+    def make_camera(self):
+        sdk, camera = MagicMock(), MagicMock()
+        for name in ("Width", "Height", "OffsetX", "OffsetY"):
+            node = getattr(camera, name)
+            node.GetMin.return_value = 0
+            node.GetMax.return_value = 4096
+            node.GetInc.return_value = 1
+            node.GetValue.return_value = 0
+            node.SetValue.side_effect = lambda value, node=node: setattr(node.GetValue, "return_value", value)
+        return sdk, camera
+
+    def test_exact_resolution_and_unsupported_size(self):
+        sdk, camera = self.make_camera()
+        configure_preview_resolution(camera, sdk)
+        self.assertEqual(camera.Width.GetValue(), 1920)
+        self.assertEqual(camera.Height.GetValue(), 1080)
+        self.assertEqual(camera.OffsetX.GetValue(), 0)
+        self.assertEqual(camera.OffsetY.GetValue(), 0)
+        camera.Width.GetMax.return_value = 1280
+        with self.assertRaisesRegex(RuntimeError, "不支援 Width"):
+            configure_preview_resolution(camera, sdk)
+        camera.Width.GetMax.return_value = 4096
+        camera.Height.GetInc.return_value = 16
+        with self.assertRaisesRegex(RuntimeError, "不支援 Height"):
+            configure_preview_resolution(camera, sdk)
+
     def test_hotplug_limit_preserves_active_streams(self):
         service = PreviewService(sdk=object())
         with patch("Src.cameras.flir_preview.CameraStream", FakeStream):
@@ -41,7 +67,7 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(service.snapshot()[0], {})
 
     def test_release_image_and_camera_on_conversion_failure(self):
-        sdk, camera = MagicMock(), MagicMock()
+        sdk, camera = self.make_camera()
         image = camera.GetNextImage.return_value
         image.IsIncomplete.return_value = False
         sdk.ImageProcessor.return_value.Convert.side_effect = RuntimeError("conversion failed")
@@ -56,7 +82,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(worker.snapshot()[3]["received"], 1)
 
     def test_frame_copied_before_sdk_buffer_release(self):
-        sdk, camera = MagicMock(), MagicMock()
+        sdk, camera = self.make_camera()
         image = camera.GetNextImage.return_value
         image.IsIncomplete.return_value = False
         source = np.ones((12, 16, 3), dtype=np.uint8)
@@ -72,8 +98,8 @@ class PreviewTests(unittest.TestCase):
         self.assertTrue(worker.snapshot()[0].all())
         camera.TriggerMode.SetValue.assert_called_once_with(sdk.TriggerMode_Off)
 
-    def test_full_rate_receiving_samples_only_sixty_previews_per_second(self):
-        sdk, camera = MagicMock(), MagicMock()
+    def test_full_rate_receiving_samples_only_thirty_previews_per_second(self):
+        sdk, camera = self.make_camera()
         worker = CameraStream(camera, sdk)
         clock = [100.0]
         count = [0]
@@ -108,14 +134,14 @@ class PreviewTests(unittest.TestCase):
             self.assertAlmostEqual(stats["average"], 180)
             self.assertEqual(stats["received"], 360)
             self.assertEqual(stats["gaps"], 0)
-            self.assertLessEqual(sdk.Image.Create.call_count, 120)
-            self.assertGreater(sdk.Image.Create.call_count, 90)
+            self.assertLessEqual(sdk.Image.Create.call_count, 60)
+            self.assertGreater(sdk.Image.Create.call_count, 45)
             self.assertEqual(image.Release.call_count, 360)
             clock[0] += 3
             self.assertEqual(worker.snapshot()[1], 0)
 
     def test_incomplete_frames_and_gaps_are_separate(self):
-        sdk, camera = MagicMock(), MagicMock()
+        sdk, camera = self.make_camera()
         worker = CameraStream(camera, sdk)
         images = [MagicMock() for _ in range(3)]
         for image, frame_id, incomplete in zip(images, (10, 11, 14), (False, True, False)):

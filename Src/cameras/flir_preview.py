@@ -5,6 +5,35 @@ import time
 from collections import deque
 
 
+def configure_preview_resolution(camera, sdk, width=1920, height=1080):
+    """Set an exact sensor ROI before acquisition, without rescaling pixels."""
+    offsets = []
+    for name in ("OffsetX", "OffsetY"):
+        offset = getattr(camera, name)
+        if sdk.IsWritable(offset):
+            offsets.append((offset, offset.GetValue()))
+            offset.SetValue(offset.GetMin())
+    for name, value in (("Width", width), ("Height", height)):
+        node = getattr(camera, name)
+        if not sdk.IsReadable(node):
+            raise RuntimeError("無法讀取相機 %s，不能確認 %d×%d" % (name, width, height))
+        if not sdk.IsWritable(node):
+            if node.GetValue() == value:
+                continue
+            raise RuntimeError("相機 %s 不可設定為 %d" % (name, value))
+        minimum, maximum, increment = node.GetMin(), node.GetMax(), node.GetInc()
+        if not minimum <= value <= maximum or (value - minimum) % max(1, increment):
+            raise RuntimeError("相機不支援 %s=%d（範圍 %d–%d，步進 %d）" %
+                               (name, value, minimum, maximum, increment))
+        node.SetValue(value)
+        if node.GetValue() != value:
+            raise RuntimeError("相機 %s 設定讀回不符 %d" % (name, value))
+    for offset, original in offsets:
+        minimum, maximum, increment = offset.GetMin(), offset.GetMax(), max(1, offset.GetInc())
+        value = max(minimum, min(original, maximum))
+        offset.SetValue(minimum + (value - minimum) // increment * increment)
+
+
 class CameraStream(threading.Thread):
     def __init__(self, camera, sdk):
         super().__init__(daemon=True)
@@ -73,6 +102,7 @@ class CameraStream(threading.Thread):
         try:
             cam.Init()
             initialized = True
+            configure_preview_resolution(cam, sdk)
             cam.TriggerMode.SetValue(sdk.TriggerMode_Off)
             cam.AcquisitionMode.SetValue(sdk.AcquisitionMode_Continuous)
             node = sdk.CEnumerationPtr(cam.GetTLStreamNodeMap().GetNode("StreamBufferHandlingMode"))
@@ -119,7 +149,7 @@ class CameraStream(threading.Thread):
                         with self.preview_condition:
                             self.pending = preview
                             self.preview_condition.notify()
-                        next_preview = now + 1 / 60
+                        next_preview = now + 1 / 30
                 except Exception as exc:
                     with self.lock:
                         self.errors += 1
