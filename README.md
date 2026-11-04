@@ -1,5 +1,7 @@
 # Pitch-Skeleton-User-Interface
 
+只需監看 1–5 台 FLIR 即時畫面（不做同步或骨架分析）：雙擊 `start_flir_preview.bat`，操作說明見 [FLIR 多相機預覽](docs/FLIR_PREVIEW.md)。
+
 棒球投手骨架分析系統：雙台 FLIR 高速相機同步錄影，以 YOLO + ViTPose 偵測 2D 骨架，並以雙相機三角測量重建 3D 骨架。
 
 > 開發者／維護者請另外參考 [DEVELOPMENT.md](docs/DEVELOPMENT.md)（環境問題排查、硬體細節、系統設計背景），相機校正細節見 [CALIBRATION.md](docs/CALIBRATION.md)。
