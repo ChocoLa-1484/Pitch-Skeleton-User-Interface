@@ -160,15 +160,22 @@ class CameraStream(threading.Thread):
                                 self.arrivals.popleft()
                             self.status = "接收中"
                     failures = 0
-                    if self.preview_enabled.is_set() and not incomplete and now >= next_preview:
-                        # DeepCopy before Release, then convert on a separate thread.
-                        preview = sdk.Image.Create()
-                        preview.DeepCopy(image)
-                        with self.preview_condition:
-                            if self.preview_enabled.is_set():
-                                self.pending = preview
-                                self.preview_condition.notify()
+                    if (self.preview_enabled.is_set() and not incomplete and now >= next_preview
+                            and converter.is_alive()):
                         next_preview = now + 1 / 30
+                        # DeepCopy before Release, then convert on a separate thread.
+                        # Preview failures must never count toward acquisition failures.
+                        try:
+                            preview = sdk.Image.Create()
+                            preview.DeepCopy(image)
+                        except Exception as exc:
+                            with self.lock:
+                                self.preview_error = "預覽複製失敗（接收繼續）：%s" % exc
+                        else:
+                            with self.preview_condition:
+                                if self.preview_enabled.is_set():
+                                    self.pending = preview
+                                    self.preview_condition.notify()
                 except Exception as exc:
                     with self.lock:
                         self.errors += 1
@@ -215,7 +222,7 @@ class PreviewService(threading.Thread):
         self.streams = {}
         self.connected = []
         self.preferences = {}
-        self.connection_attempts = {}
+        self.reconnects = {}
         self.last_disconnect = {}
         self.message = "正在偵測 FLIR 攝影機…"
 
@@ -248,7 +255,7 @@ class PreviewService(threading.Thread):
                     status = "正在停止接收…" if stream and stream.is_alive() else "接收已關閉"
                 elif not options["preview"]:
                     frame = None
-                stats["reconnects"] = max(0, self.connection_attempts.get(sn, 1) - 1)
+                stats["reconnects"] = self.reconnects.get(sn, 0)
                 stats["last_disconnect"] = self.last_disconnect.get(sn, "")
                 snapshots[sn] = frame, fps, status, stats
             enabled = sum(snapshot[3]["acquisition_enabled"] for snapshot in snapshots.values())
@@ -281,7 +288,12 @@ class PreviewService(threading.Thread):
                         old.stop_event.set()
                     continue
             if old is not None and old.is_alive():
-                continue
+                if not old.stop_event.is_set():
+                    continue
+                # Acquisition was re-enabled while the old stream is still stopping;
+                # wait for it (GetNextImage times out within ~1 s) instead of
+                # skipping the restart until the next 2 s poll.
+                old.join()
             stream = CameraStream(cameras[serial], self.sdk)
             with self.lock:
                 # Re-read after construction in case the GUI changed a switch.
@@ -291,8 +303,10 @@ class PreviewService(threading.Thread):
                 stream.set_preview_enabled(options["preview"])
                 if old is not None and not old.stop_event.is_set():
                     self.last_disconnect[serial] = old.snapshot()[2]
-                if old is None or not old.stop_event.is_set():
-                    self.connection_attempts[serial] = self.connection_attempts.get(serial, 0) + 1
+                    # Count only real drops of a session that actually streamed,
+                    # not every failed reopen attempt while the camera is busy.
+                    if old.started is not None:
+                        self.reconnects[serial] = self.reconnects.get(serial, 0) + 1
                 self.streams[serial] = stream
                 stream.start()
         with self.lock:

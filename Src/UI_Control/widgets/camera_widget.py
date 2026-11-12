@@ -127,6 +127,7 @@ class PoseCameraTabControl(QWidget):
                 QMessageBox.warning(self, "無法開啟相機", str(exc))
                 return
             # self.ui.ResolutionLabel.setText(f"(0, 0) - ({frame_width} x {frame_height}), FPS: {fps}")
+            self.photo_dir = None  # 重新開相機視為新的機位，照片放新資料夾
             self.timer.start(1)
         else:
             self.camera.toggleCamera(False)
@@ -175,7 +176,9 @@ class PoseCameraTabControl(QWidget):
             QMessageBox.warning(self, "無法儲存照片", "目前沒有可儲存的影像，請先開啟相機。")
             return
 
-        output_dir = f'{DB_DIR.as_posix()}/Record/Calibrate_Picture/{self.camera.pitch_hand}'
+        if self.photo_dir is None:
+            self.photo_dir = CALIB_PHOTO_DIR / datetime.now().strftime("%Y%m%d_%H%M")
+        output_dir = str(self.photo_dir)
         cf_dir = os.path.join(output_dir, 'cf')
         cs_dir = os.path.join(output_dir, 'cs')
         os.makedirs(cf_dir, exist_ok=True)

@@ -34,9 +34,13 @@ git clone https://github.com/ZhengMo1220/Pitch-Skeleton-User-Interface.git
 ```
 Db\pretrain\
 ├─ epoch_210.pth                                                   ← 骨架模型（程式預設使用）
-├─ yolov8_s_syncbn_fast_8xb16-500e_coco_20230117_180101-5aa5f0f1.pth ← 人物偵測（程式預設使用）
+├─ yolo26m.pt                                                      ← 人物偵測（程式預設使用）
+├─ yolo26l.pt、yolo26x.pt                                          ← 人物偵測（可切換）
+├─ yolov8_s_syncbn_fast_8xb16-500e_coco_20230117_180101-5aa5f0f1.pth ← 舊版人物偵測（可切換）
 └─ 其他 .pth（備用模型）
 ```
+
+人物偵測器預設為 YOLO26m（ultralytics）。要切換時，先設定環境變數 `PITCH_DETECTOR` 再啟動程式，可用值為 `yolo26m`、`yolo26l`、`yolo26x`、`yolov8s`（例如 `set PITCH_DETECTOR=yolov8s`），對照表在 `Src/pose/person_detector.py`。缺少的 YOLO26 權重可在 Pitcher 環境下於 `Db\pretrain` 執行 `python -c "from ultralytics import YOLO; YOLO('yolo26l.pt')"` 下載。
 
 ### 2. 建立 conda 環境
 
@@ -115,7 +119,7 @@ conda activate Pitcher
 python Src/UI_Control/main.py
 ```
 
-也可以直接雙擊專案根目錄的 `start.bat`，它會自動啟動 Pitcher 環境並切換到正確目錄。
+也可以直接雙擊專案根目錄的 `start.bat`，它會自動啟動 Pitcher 環境並切換到正確目錄。`start.bat`、`start_calibrate.bat`、`start_flir_preview.bat` 雙擊後黑色命令視窗只閃一下就隱藏；程式輸出寫到 `Db\Logs\<bat 名稱>.log`（每次啟動覆蓋），程式無法啟動或異常結束時會跳出訊息視窗，告知 log 位置。
 
 | 分頁 | 用途 |
 |---|---|

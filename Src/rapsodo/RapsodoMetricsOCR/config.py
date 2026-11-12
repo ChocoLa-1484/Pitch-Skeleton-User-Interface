@@ -11,8 +11,12 @@ CAPTURE_FPS: int = 1
 # ---------------------------------------------------------------------------
 OUTPUT_JSON_PATH: str = r"C:\rapsodo-metrics-ocr\rapsodo_data.json"
 OUTPUT_JSON_HITTING: str  = r"C:\rapsodo-metrics-ocr\rapsodo_data_hitting.json"
-# 專案的 Db/Rapsodo/（以本檔位置推算，不寫死磁碟機）
-OUTPUT_JSON_PITCHING: str = str(Path(__file__).resolve().parents[3] / "Db" / "Rapsodo" / "rapsodo_data_pitching.json")
+# 專案的 Db/Rapsodo/（與 Src.paths.RAPSODO_DATA_DIR 共用，不寫死磁碟機）
+try:
+    from Src.paths import RAPSODO_DATA_DIR as _RAPSODO_DATA_DIR
+except ImportError:  # 單獨執行此工具、Src 不在 sys.path 時
+    _RAPSODO_DATA_DIR = Path(__file__).resolve().parents[3] / "Db" / "Rapsodo"
+OUTPUT_JSON_PITCHING: str = str(_RAPSODO_DATA_DIR / "rapsodo_data_pitching.json")
 BACKUP_DIR: str       = r"C:\rapsodo-metrics-ocr\backup"
 LOG_FILE: str         = r"C:\rapsodo-metrics-ocr\rapsodo_ocr.log"
 

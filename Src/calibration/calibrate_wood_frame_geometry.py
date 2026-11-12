@@ -103,7 +103,7 @@ class WoodFrameGeometryWindow(QMainWindow):
         self.summary.setMaximumHeight(145)
         layout.addWidget(self.summary)
         try:
-            self.set_intrinsics(calib_store.INTRINSICS_JSON)
+            self.set_intrinsics(calib_store.latest_intrinsics_json())
         except (OSError, ValueError, KeyError):
             self.summary.setPlainText("請先選擇該拍照相機的內參 JSON。")
 
@@ -129,7 +129,7 @@ class WoodFrameGeometryWindow(QMainWindow):
         self.intrinsics.addItems(sorted(entries))
 
     def choose_intrinsics(self):
-        path, _ = QFileDialog.getOpenFileName(self, "拍照相機的內參", calib_store.INTRINSICS_JSON, "JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "拍照相機的內參", calib_store.latest_intrinsics_json(), "JSON (*.json)")
         if path:
             try:
                 self.set_intrinsics(path)

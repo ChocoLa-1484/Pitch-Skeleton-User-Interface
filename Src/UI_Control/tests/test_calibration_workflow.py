@@ -1,4 +1,5 @@
 """Run with: python -m unittest discover -s Src/UI_Control/tests -v"""
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -110,13 +111,13 @@ class StorageTests(unittest.TestCase):
                     workflow.publish_calibration(root, session, tuple(entries), entries, report,
                                                  {"cf": front, "cs": side})
             self.assertEqual(roles_path.read_bytes(), before)
-            self.assertFalse((root / "intrinsic/intrinsics_all.json").exists())
+            self.assertEqual(list(root.glob("Intrinsics/**/*.json")), [])
             workflow.publish_calibration(root, session, tuple(entries), entries, report,
                                          {"cf": front, "cs": side})
             self.assertEqual((session / "previous_calibration/camera_roles.json").read_bytes(), before)
             from Src.calibration import calib_store
             with patch.multiple(calib_store, ROLES_JSON=str(roles_path),
-                                INTRINSICS_JSON=str(root / "intrinsic/intrinsics_all.json"),
+                                INTRINSIC_DIR=str(root / "Intrinsics"),
                                 FUNDAMENTAL_JSON=str(root / "extrinsic/fundamental.json")):
                 calibration, reason = calib_store.load_stereo_calibration()
                 self.assertIsNone(reason)
@@ -139,8 +140,12 @@ class IntrinsicOnlyTests(unittest.TestCase):
             workflow.publish_intrinsics(root, session, ("front123", "side456"), entries, "2026-10-14T00:00:00")
             roles = json.loads((root / "camera_roles.json").read_text(encoding="utf-8"))
             self.assertEqual((roles["front"], roles["side"]), ("front123", "side456"))
-            stored = json.loads((root / "intrinsic/intrinsics_all.json").read_text(encoding="utf-8"))
-            self.assertEqual(set(stored), {"front123", "side456"})
+            # Only the day folder holds intrinsics; nothing is written at Intrinsics/ top level.
+            self.assertFalse((root / "Intrinsics/intrinsics_all.json").exists())
+            day = root / "Intrinsics" / ("Intrinsic_" + datetime.now().strftime("%Y%m%d"))
+            stored = json.loads((day / "Intrinsics_all.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(stored), {"front123_CF", "side456_CS"})
+            self.assertEqual(stored["front123_CF"]["serial_number"], "front123")
             self.assertEqual(fundamental.read_text(encoding="utf-8"), '{"F": "unchanged"}')
             self.assertTrue((session / "previous_calibration/camera_roles.json").exists())
 
@@ -181,7 +186,8 @@ class GuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(self.gui.CalibrationWindow, "scan_cameras"), \
                  patch.object(self.gui.calib_store, "CALIB_DIR", directory), \
-                 patch.object(self.gui.calib_store, "load_intrinsics", return_value={"F": entry, "S": entry}):
+                 patch.object(self.gui.calib_store, "find_intrinsic",
+                              side_effect=lambda sn, hand=None, view=None: entry if sn in ("F", "S") else None):
                 window = self.gui.CalibrationWindow()
                 failures = []
                 window.fail = failures.append
@@ -257,8 +263,11 @@ class GuiTests(unittest.TestCase):
                     self.assertIsNone(window.job)
                     self.assertEqual(failures, [])
                     self.assertIn(serial, window.entries)
-                    self.assertTrue((window.session / "intrinsic" / ("calib_SN" + serial + ".npz")).exists())
-                    self.assertFalse((Path(directory) / "intrinsic/intrinsics_all.json").exists())
+                    # No npz any more; per-image quality lives in the entry.
+                    self.assertEqual(list(window.session.rglob("*.npz")), [])
+                    self.assertEqual(len(window.entries[serial]["per_image_rms"]), 15)
+                    self.assertEqual(window.entries[serial]["view"], "CF" if serial == "F" else "CS")
+                    self.assertEqual(list(Path(directory).glob("Intrinsics/**/*.json")), [])
                 self.assertEqual(window.state, "capture")
                 self.assertEqual(camera.release.call_count, 2)
                 window.close()

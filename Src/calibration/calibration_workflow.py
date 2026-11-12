@@ -9,6 +9,21 @@ from datetime import datetime
 import cv2
 import numpy as np
 
+from Src.calibration.calib_store import DATED_INTRINSICS_NAME, INTRINSIC_SUBDIR, rekey_legacy_intrinsics, intrinsic_key
+
+
+def dated_intrinsics_name(calib_dir, date=None):
+    """Published intrinsics live only in Intrinsics/Intrinsic_<date>/ (no top-level file);
+    returns that JSON path relative to calib_dir, reusing an existing lower-case day folder."""
+    date = date or datetime.now().strftime("%Y%m%d")
+    base = Path(calib_dir) / INTRINSIC_SUBDIR
+    folder = "Intrinsic_" + date
+    if base.is_dir():
+        for path in base.iterdir():
+            if path.is_dir() and path.name.lower() == folder.lower():
+                folder = path.name
+    return "{}/{}/{}".format(INTRINSIC_SUBDIR, folder, DATED_INTRINSICS_NAME)
+
 
 MIN_PAIRS = 4
 POINTS_PER_IMAGE = 6
@@ -149,6 +164,15 @@ def save_json(path, data):
     atomic_write(path, json_bytes(data))
 
 
+def merge_role_intrinsics(existing, roles, entries):
+    """Key the wizard's two entries as <serial>_CF / <serial>_CS (it does not know the pitching hand),
+    so one camera used as CF for both hands never overwrites another position's calibration."""
+    merged = rekey_legacy_intrinsics(existing)
+    for sn, view in zip(roles, ("CF", "CS")):
+        merged[intrinsic_key(sn, None, view)] = dict(entries[sn], serial_number=str(sn), view=view)
+    return merged
+
+
 def publish_calibration(calib_dir, session, roles, entries, report, points):
     """Publish only a completed run. Back up replaced files and roll back errors."""
     front, side = roles
@@ -159,14 +183,15 @@ def publish_calibration(calib_dir, session, roles, entries, report, points):
     if matrix.shape != (3, 3) or not np.isfinite(matrix).all() or np.linalg.matrix_rank(matrix) != 2:
         raise ValueError("外參矩陣無效，未更新校正檔。")
     calib_dir, session = Path(calib_dir), Path(session)
-    intrinsics_path = calib_dir / "intrinsic/intrinsics_all.json"
+    intrinsics_name = dated_intrinsics_name(calib_dir)
+    intrinsics_path = calib_dir / intrinsics_name
     existing = json.loads(intrinsics_path.read_text(encoding="utf-8")) if intrinsics_path.exists() else {}
-    existing.update(entries)
+    existing = merge_role_intrinsics(existing, roles, entries)
     report = dict(report, front=front, side=side, session=str(session))
     outputs = {
         "camera_roles.json": json_bytes({"front": front, "side": side,
                                          "updated_at": report["estimated_at"]}),
-        "intrinsic/intrinsics_all.json": json_bytes(existing),
+        intrinsics_name: json_bytes(existing),
         "extrinsic/selected_points_cf.json": json_bytes(points["cf"]),
         "extrinsic/selected_points_cs.json": json_bytes(points["cs"]),
         "extrinsic/fundamental.json": json_bytes(report),
@@ -182,22 +207,19 @@ def publish_intrinsics(calib_dir, session, roles, entries, updated_at):
     for sn in roles:
         validate_intrinsic(entries[sn])
     calib_dir, session = Path(calib_dir), Path(session)
-    intrinsics_path = calib_dir / "intrinsic/intrinsics_all.json"
+    intrinsics_name = dated_intrinsics_name(calib_dir)
+    intrinsics_path = calib_dir / intrinsics_name
     existing = json.loads(intrinsics_path.read_text(encoding="utf-8")) if intrinsics_path.exists() else {}
-    existing.update(entries)
+    existing = merge_role_intrinsics(existing, roles, entries)
     outputs = {
         "camera_roles.json": json_bytes({"front": front, "side": side, "updated_at": updated_at}),
-        "intrinsic/intrinsics_all.json": json_bytes(existing),
+        intrinsics_name: json_bytes(existing),
     }
     _write_with_backup(calib_dir, session, roles, outputs)
 
 
 def _write_with_backup(calib_dir, session, roles, outputs):
     """寫入校正檔：先把要被取代的舊檔備份到 session/previous_calibration，任何一檔失敗就全部還原。"""
-    for sn in roles:
-        name = "intrinsic/calib_SN{}.npz".format(sn)
-        if (session / name).exists():
-            outputs[name] = (session / name).read_bytes()
     originals = {name: (calib_dir / name).read_bytes() if (calib_dir / name).exists() else None
                  for name in outputs}
     backup = session / "previous_calibration"

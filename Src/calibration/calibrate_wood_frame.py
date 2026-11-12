@@ -130,7 +130,7 @@ class WoodFrameWindow(QMainWindow):
         self.selected_target = wood_frame_target()
         self.target_source = "重新實測座標（圖上 cm 換算為 mm）"
         self.world_pair_id = None
-        self.intrinsic_source = str(Path(calib_store.INTRINSICS_JSON))
+        self.intrinsic_source = str(Path(calib_store.latest_intrinsics_json()))
         self._build_ui()
         self.preview_timer = QTimer(self)
         self.preview_timer.timeout.connect(self.update_preview)
@@ -193,7 +193,7 @@ class WoodFrameWindow(QMainWindow):
             self.serials[role] = serial
             fields.addRow(title + " 序號", serial)
             combo.currentTextChanged.connect(
-                lambda key, r=role: self.serials[r].setText(key if key not in ROLES else ""))
+                lambda key, r=role: self.serials[r].setText(self._serial_of(key)))
         self.target_count = QSpinBox()
         self.target_count.setRange(5, 30)
         self.target_count.setValue(15)
@@ -377,12 +377,22 @@ class WoodFrameWindow(QMainWindow):
             saved = calib_store.load_roles()
             if saved:
                 for role, sn in zip(ROLES, saved):
-                    index = self.combos[role].findText(sn)
+                    # Keys are <serial>[_Right]_CF; pick this camera's entry for this view if present.
+                    keys = [k for k in self.entries if self._serial_of(k) == sn]
+                    keys.sort(key=lambda k: not k.upper().endswith("_" + role.upper()))
+                    index = self.combos[role].findText(keys[0]) if keys else -1
                     if index >= 0:
                         self.combos[role].setCurrentIndex(index)
                     self.serials[role].setText(sn)
         except (ValueError, KeyError, OSError) as exc:
             self.status.setText("尚無完整內參，請選擇內參 JSON：" + str(exc))
+
+    def _serial_of(self, key):
+        """Keys are now <serial>_Right_CF; the serial field must get the physical serial only."""
+        if key in ROLES:
+            return ""
+        entry = self.entries.get(key) or {}
+        return str(entry.get("serial_number") or key)
 
     def set_intrinsics(self, entries, source):
         self.entries = entries
@@ -419,8 +429,9 @@ class WoodFrameWindow(QMainWindow):
                     if stored_serial and str(stored_serial) != serial:
                         raise ValueError("所選內參序號與 {} 拍攝相機序號不符。".format(role.upper()))
                     camera["serial_number"] = serial
-            session = Path(calib_store.CALIB_DIR) / "sessions" / (
-                datetime.now().strftime("%Y%m%d_%H%M%S_%f") + self.session_suffix)
+            # 與 calibrate.py 共用命名：<日期_時分秒>_<方法>_SN<正面>_SN<側面>
+            session = Path(calib_store.new_session_dir(
+                self.session_suffix.lstrip("_"), [self.serials[r].text().strip() for r in ROLES]))
             for role in ROLES:
                 (session / role).mkdir(parents=True, exist_ok=True)
             self.cameras, self.session = cameras, session

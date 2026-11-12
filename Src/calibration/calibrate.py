@@ -422,12 +422,13 @@ class CalibrationWindow(QMainWindow):
             raise ValueError("「沿用已有內參」與「只做內參」只能擇一。")
         entries = {}
         if self.reuse.isChecked():
-            stored = calib_store.load_intrinsics()
-            for sn in roles:
-                if sn not in stored:
+            for sn, view in zip(roles, ("CF", "CS")):
+                # Prefer this camera's CF/CS calibration; a camera can serve as CF for both hands.
+                entry = calib_store.find_intrinsic(sn, view=view)
+                if entry is None:
                     raise ValueError("SN{} 尚無內參，請取消「沿用已有內參」。".format(sn))
-                validate_intrinsic(stored[sn])
-                entries[sn] = stored[sn]
+                validate_intrinsic(entry)
+                entries[sn] = entry
         self.roles, self.entries = roles, entries
         method = "intrinsic" if self.intrinsic_only.isChecked() else "wand"
         self.session = Path(calib_store.new_session_dir(method, roles))
@@ -467,21 +468,17 @@ class CalibrationWindow(QMainWindow):
                 super().reset_samples()
                 collector.sample_files = []
 
-            def capture_sample(collector):
-                count = collector.captured_count
-                super().capture_sample()
-                if collector.captured_count > count:
-                    try:
-                        # Keep originals for later method comparison/recalibration.
-                        stamp = datetime.now().strftime("%H%M%S_%f")
-                        filename = stamp + ".png"
-                        write_image(sample_dir / filename, collector.last_frame)
-                        collector.sample_files.append(filename)
-                    except Exception as exc:
-                        collector.objpoints.pop()
-                        collector.imgpoints.pop()
-                        collector.captured_count -= 1
-                        collector.log("未接受本組：原始照片儲存失敗 {}".format(exc))
+            def _on_sample_accepted(collector, frame):
+                # Keep originals in this session (not calib.py's dated folder) for
+                # later method comparison/recalibration; manual and auto capture both pass here.
+                try:
+                    filename = datetime.now().strftime("%H%M%S_%f") + ".png"
+                    write_image(sample_dir / filename, frame)
+                    collector.sample_files.append(filename)
+                    return True
+                except Exception as exc:
+                    collector.log("未接受本組：原始照片儲存失敗 {}".format(exc))
+                    return False
 
             def keyPressEvent(collector, event):
                 # Window-wide Space shortcut is handled by the wizard.
@@ -497,14 +494,16 @@ class CalibrationWindow(QMainWindow):
         self.panel.lbl_view.setMinimumHeight(280)
         self.panel.log_area.setMinimumHeight(80)
         self.panel.log_area.setMaximumHeight(120)
-        self.panel.cmb_camera.parentWidget().hide()
-        self.panel.cmb_front.parentWidget().hide()
+        # The wizard owns camera, method, output location and board spec.
+        for card in (self.panel.method_card, self.panel.camera_card, self.panel.target_card):
+            card.hide()
         self.panel.photo_group.hide()
         self.panel.btn_calibrate.hide()
         self.panel.spn_cols.setValue(self.cols.value())
         self.panel.spn_rows.setValue(self.rows.value())
         self.panel.spn_square.setValue(self.square.value())
-        self.panel.spn_cols.parentWidget().setEnabled(False)
+        self.panel.board_fixed = True
+        self.panel.update_guidance()
         sn = self.roles[role_index]
         index = self.panel.cmb_camera.findData(sn)
         if index < 0:
@@ -583,14 +582,12 @@ class CalibrationWindow(QMainWindow):
             "sample_count": panel.captured_count, "calibrated_at": datetime.now().isoformat(timespec="seconds"),
             "sample_images": ["intrinsic/images_SN{}/{}".format(sn, name) for name in panel.sample_files],
             "distortion_locked": panel.chk_lock_dist.isChecked(), "lens_focal_mm": panel.spn_focal.value() or None,
+            "view": "CF" if role_index == 0 else "CS",
+            # No npz: per-image quality is kept in the JSON, aligned with sample_images.
+            "per_image_rms": [round(float(v), 4) for v in errors],
+            "tilt_deg": [round(float(v), 1) for v in tilts],
         }
         validate_intrinsic(entry)
-        np.savez(str(self.session / "intrinsic" / ("calib_SN{}.npz".format(sn))),
-                 mtx=K, dist=dist, image_size=panel.image_size, rms=rms, per_image_rms=errors,
-                 mean_reproj_err=np.mean(errors), tilt_deg=tilts, pattern=entry["pattern"],
-                 square_size=self.square.value(), serial_number=sn, sample_count=panel.captured_count,
-                 objpoints=np.asarray(panel.objpoints), imgpoints=np.asarray(panel.imgpoints),
-                 sample_images=np.asarray(entry["sample_images"]))
         self.entries[sn] = entry
         self.persist_session("intrinsic_{}_complete".format(role_index))
         self.log("SN{} 內參完成，RMS {:.3f} px。{}".format(sn, rms, "；".join(problems)))

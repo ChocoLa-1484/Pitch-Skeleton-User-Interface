@@ -22,7 +22,7 @@
 | 位置 | 內容 |
 |---|---|
 | `Src/calibration/calibrate.py` | 整合校正精靈（內參 → 校正桿外參；也可勾「只做內參」，外參改用 RoMa） |
-| `Src/calibration/calib.py` | 單台內參視窗（精靈內部也用它；可讀照片資料夾） |
+| `Src/calibration/calib.py` | 單台內參視窗：即時拍攝（自動擷取）或讀照片資料夾，存到 `Intrinsic_<日期>/Right_CF|Right_CS|Left_CF|Left_CS`（精靈內部也用它） |
 | `Src/calibration/calib_store.py`、`calibration_workflow.py` | 共用：校正檔讀寫與發布、校正桿 F 計算 |
 | `Src/calibration/chessboard_cross/` | 同學（ChocoLa-1484）的公制方法：棋盤格內外參、螢光球提取（十字架計算 2026-10-21 由原作者移除，資料夾名稱沿用） |
 | `Src/calibration/calibrate_wood_frame.py`、`wood_frame.py` | 同學的木框 PnP 外參：視窗與計算（第 4 節） |
@@ -57,7 +57,7 @@ python .\Src\calibration\calibrate.py
 新入口以程式位置解析路徑，可從任意工作目錄啟動。舊有分步工具仍可使用：
 
 ```
-python Src/calibration/calib.py                        # 1. 每台相機內參，並指定角色
+python Src/calibration/calib.py                        # 1. 每台相機內參（角色由校正精靈或「左右投相機設定」指定）
 python Src/UI_Control/main.py                         # 2.「2D 相機」分頁拍校正桿照片
 python Src/calibration/calibrate.py                   # 3–4. 標註球心、計算 F（原 01、02，已整合）
 python Src/legacy/calibration/03_3d.py                 # 5.（選用）舊尺度驗證
@@ -88,14 +88,23 @@ python -m unittest discover -s Src/UI_Control/tests -v
 
 以下為原本仍保留的分步工具流程：
 
-**`calib.py` 直接使用棋盤格照片（2026-10-13）**：不必連接相機。在第 2 區填好內角點寬／高與每格邊長（mm），於「從照片校正」填入照片所屬相機的序號，再按「讀取照片資料夾」。每次選單台相機的資料夾，例如 `cf` 或 `cs`，不會遞迴混入其他相機照片。支援 JPG、JPEG、PNG、BMP、TIFF 與中文路徑；無角點、尺寸不符、壞檔及與前一張有效照片幾乎相同的影像會略過並記錄原因。載入成功會取代原樣本，取消或整批失敗則保留原樣本。
+**`calib.py` 內參視窗（2026-11-11 改版）**：左欄依序為 1 校正方法（即時拍攝／讀取照片資料夾）、2 相機、3 儲存至（右投／左投、CF 正面／CS 側面）、4 棋盤格規格、5 鏡頭焦距（選填）、6 擷取與校正。
 
-確認有效照片至少 10 張（建議 15–20 張、不同位置與傾斜角）後，按「執行校正」。結果沿用既有品質檢查，存至 `Db/Calibration/intrinsic/intrinsics_all.json` 與 `calib_SN<序號>.npz`，另記錄實際採用的照片路徑。同一序號會更新其校正結果。兩台相機請分別載入與計算；改棋盤格規格後需重新讀取照片。整合精靈 `calibrate.py` 仍沿用原本的即時取樣流程。
+- 角點一律用 `findChessboardCornersSB`（全解析度；找不到時改窮舉模式，再改半解析度並以 `cornerSubPix` 細修）。
+- 即時拍攝：按「開始自動擷取」後每隔設定秒數（預設 3 秒）擷取一次；板子在預覽中拿穩、且與每一組已拍樣本平均位移超過 25 px 才收下，偵測在背景執行緒進行。空白鍵可手動擷取。照片存到 `Db/Calibration/Intrinsics/Intrinsic_<日期>/Right_CF|Right_CS|Left_CF|Left_CS/<序號>_<日期>_<隨機碼>/<組數>_<時間>.png`，每次開始拍攝（連接相機或清空樣本後）都建立新的資料夾，同一天可以拍很多次；清空樣本時可選擇一併刪除本次照片與資料夾。
+- 預覽下方顯示九宮格位置、角度（正對、上下、左右、斜向傾斜 ≥ 20°）與距離（近、遠，僅建議）各有幾組，並列出還缺哪些。角度用棋盤格的仿射壓縮估計，不需要內參。
+- 讀取照片資料夾：每次選一台相機的資料夾，不會遞迴混入其他相機照片。選本程式拍的 `<序號>_<日期>_<隨機碼>` 資料夾時，序號、左右投、CF／CS 與日期自動帶入（序號欄可留空；填了但與資料夾名稱不同時以填入的為準並提示）；其他資料夾要先填序號，結果存到當天日期。無角點、尺寸不符、壞檔與重複照片會略過並記錄原因；取消或整批失敗會保留原樣本。
+- 有樣本時，方法、儲存位置、棋盤格規格會鎖住，清空樣本後才能改。
+- 鏡頭焦距不參與計算，只用來檢查 fx；≥ 25 mm 會自動勾選「鎖住畸變」，這一項會改變結果。
+- 至少 10 組才能按「執行校正」（建議 15 組以上）。結果只存在 `Intrinsic_<日期>/Intrinsics_all.json`，不再另存 npz。鍵為「序號＋位置」，例如 `24380115_Right_CF`：同一台相機可以同時當右投與左投的 CF，兩個位置各存一筆，互不覆蓋（換位置後重新對焦，內參就不同）；同一天同一位置重做才會覆蓋。每筆有 `serial_number`、`pitch_hand`、`view`、`capture_dir`、內參與品質，以及與 `source_images` 一一對應的 `per_image_rms`、`tilt_deg`。`source_images` 與 `capture_dir` 存成相對於該 `Intrinsic_<日期>` 資料夾、以 `/` 分隔的路徑（例如 `Left_CF/24380115_20261112_a1b2c3/001_101500_123.png`），整個 `Db` 搬到別台電腦仍對得上；照片在其他磁碟機時無法相對，才保留絕對路徑。程式讀取用 `calib_store.resolve_intrinsic_path(路徑, 日期資料夾)`，舊的絕對路徑也能讀。
+
+`Db/Calibration/Intrinsics/` 底下沒有總表：讀內參時合併所有 `Intrinsic_<日期>/Intrinsics_all.json`，依位置挑選——同序號＋同左右投＋同 CF/CS 最優先，其次同序號＋同 CF/CS（校正精靈不記左右投，鍵為 `<序號>_CF`），最後才用同序號的任何一筆（舊資料）；同一層取日期最新、同一天取 `calibrated_at` 最晚。左右投設定（`pitch_camera_profiles.json`）依手別取，舊的 `camera_roles.json` 視為右投。舊格式只以序號為鍵的檔案，下次寫入同一天時會依條目裡的 `pitch_hand`／`view` 自動改成新鍵。
+- 原本的「指定正面／側面」區塊已移除；角色由校正精靈或主程式「2D 相機 → 左右投相機設定」指定。整合精靈 `calibrate.py` 內部仍用這個視窗取樣，但照片存在精靈自己的工作階段資料夾。
 
 | 步驟 | 執行 | 要接什麼 | 產出 |
 |---|---|---|---|
-| 1. 內參（每台各做一次） | `python Src/calibration/calib.py`，選相機 → 連接 → 擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `intrinsic\intrinsics_all.json`、`calib_SN<序號>.npz` |
-| 2. 指定正面/側面 | `calib.py` 第 4 區 → 儲存角色 | — | `camera_roles.json` |
+| 1. 內參（每台各做一次） | `python Src/calibration/calib.py`，選相機 → 連接 → 選左右投、CF／CS → 自動擷取 15~20 組 → 執行校正 | 只要 USB，同步線可接可不接 | `Intrinsics\Intrinsic_<日期>\`（`Right_CF…\<序號>_<日期>_<隨機碼>\` 照片、`Intrinsics_all.json`） |
+| 2. 指定正面/側面 | 校正精靈（`calibrate.py`），或主程式「2D 相機 → 左右投相機設定」 | — | `camera_roles.json`／`pitch_camera_profiles.json` |
 | 3. 拍外參照片 | `python Src/UI_Control/main.py` →「2D 相機」分頁 →「拍照」 | 兩台 + GPIO 同步線 | `Db\Calibration\photos\<日期_時分>\cf\`、`cs\`（每次開相機一個資料夾） |
 | 4–5. 標註對應點、算 F 矩陣 | `start_calibrate.bat`（`calibrate.py`）校正桿流程：左右各點 6 個球心 → RANSAC 求 F（原 `01`、`02` 已整合並刪除） | — | `extrinsic\selected_points_*.json`、`extrinsic\fundamental.json` |
 | 6. 驗證 | `python Src/legacy/calibration/03_3d.py`（用第 1、4 點實距 340 mm 換算尺度，畫出 3D 點） | — | — |

@@ -9,6 +9,7 @@ from tracker.mc_bot_sort import BoTSORT
 from tracker.tracking_utils.timer import Timer
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.utils import adapt_mmdet_pipeline
+from Src.pose.person_detector import resolve_detector, UltralyticsPersonDetector
 try:
     from mmdet.apis import inference_detector, init_detector
     has_mmdet = True
@@ -19,15 +20,23 @@ except (ImportError, ModuleNotFoundError):
 
 
 class Model(object):
-    def __init__(self):
+    def __init__(self, detector=None):
+        """detector: key of person_detector.DETECTORS (default yolo26m, or $PITCH_DETECTOR)."""
         self.detect_args = self.setDetectParser()
         self.pose_args = self.setPoseParser()
         self.tracker_args = self.setTrackerParser()
-        self.detector = init_detector(
-        self.detect_args.det_config, self.detect_args.det_checkpoint, device=self.detect_args.device)
-        self.detector.cfg.test_dataloader.dataset.pipeline[
-            0].type = 'mmdet.LoadImageFromNDArray'
-        self.detector_test_pipeline = Compose(self.detector.cfg.test_dataloader.dataset.pipeline)
+        self.detector_name, spec = resolve_detector(detector)
+        self.detector_backend = spec['backend']
+        if self.detector_backend == 'ultralytics':
+            self.detector = UltralyticsPersonDetector(
+                spec['weights'], device=self.detect_args.device, score_thr=self.detect_args.score_thr)
+            self.detector_test_pipeline = None
+        else:
+            self.detector = init_detector(str(spec['config']), str(spec['weights']), device=self.detect_args.device)
+            self.detector.cfg.test_dataloader.dataset.pipeline[
+                0].type = 'mmdet.LoadImageFromNDArray'
+            self.detector_test_pipeline = Compose(self.detector.cfg.test_dataloader.dataset.pipeline)
+        print_log('[Model] person detector: {} ({})'.format(self.detector_name, self.detector_backend))
 
         self.pose_estimator = init_pose_estimator(
             self.pose_args.pose_config,

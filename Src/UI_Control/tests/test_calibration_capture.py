@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
@@ -31,8 +32,15 @@ class CalibrationCaptureTests(unittest.TestCase):
         self.addCleanup(window.close)
         window.timer.stop()
         window.camera = Mock()
+        window.connected_sn = "TEST"
         window.last_frame = np.zeros((160, 120, 3), dtype=np.uint8)
         window.image_size = (120, 160)
+        # Live captures save PNGs; keep them out of the real Db folder.
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        intrinsic = patch.object(self.calib.calib_store, "INTRINSIC_DIR", temp.name)
+        intrinsic.start()
+        self.addCleanup(intrinsic.stop)
         return window
 
     def test_capture_accepts_2d_and_3d_corners_and_rejects_duplicates(self):
@@ -44,9 +52,7 @@ class CalibrationCaptureTests(unittest.TestCase):
                     samples = [points.reshape(first_shape),
                                points.reshape(next_shape),
                                (points + [6, 8]).astype(np.float32).reshape(next_shape)]
-                    with patch.object(self.calib.cv2, "findChessboardCorners",
-                                      return_value=(True, points.reshape(-1, 1, 2))), \
-                         patch.object(self.calib.cv2, "cornerSubPix", side_effect=samples):
+                    with patch.object(self.calib, "find_chessboard_corners", side_effect=samples):
                         window.capture_sample()
                         window.capture_sample()
                         self.assertEqual(window.captured_count, 1)
@@ -63,12 +69,62 @@ class CalibrationCaptureTests(unittest.TestCase):
         window.captured_count = 1
         window.spn_cols.setValue(7)
         corners = np.zeros((49, 1, 2), dtype=np.float32)
-        with patch.object(self.calib.cv2, "findChessboardCorners", return_value=(True, corners)), \
-             patch.object(self.calib.cv2, "cornerSubPix", return_value=corners):
+        with patch.object(self.calib, "find_chessboard_corners", return_value=corners):
             window.capture_sample()
         self.assertEqual(window.captured_count, 1)
         self.assertEqual(len(window.objpoints), 1)
         self.assertIn("清空樣本", window.log_area.toPlainText())
+
+    def test_live_capture_saves_photo_under_hand_and_view(self):
+        from datetime import datetime
+        window = self.collector()
+        window.hand_buttons["left"].setChecked(True)
+        window.view_buttons["CS"].setChecked(True)
+        points = (np.mgrid[0:8, 0:7].T.reshape(-1, 2).astype(np.float32) * 10).reshape(-1, 1, 2)
+        with patch.object(self.calib, "find_chessboard_corners", return_value=points):
+            self.assertTrue(window.capture_sample())
+        saved = Path(window._photo_paths[0])
+        today = datetime.now().strftime("%Y%m%d")
+        self.assertEqual(saved.parent.parts[-3:-1], ("Intrinsic_" + today, "Left_CS"))
+        self.assertRegex(saved.parent.name, r"^TEST_{}_[0-9a-f]{{6}}$".format(today))
+        self.assertRegex(saved.name, r"^001_\d{6}_\d{3}\.png$")
+        self.assertTrue(saved.exists())
+        # A second capture in the same session uses the same capture folder.
+        moved = points + 40
+        with patch.object(self.calib, "find_chessboard_corners", return_value=moved):
+            self.assertTrue(window.capture_sample())
+        self.assertEqual(Path(window._photo_paths[1]).parent, saved.parent)
+        # Output location is locked while samples exist.
+        self.assertFalse(window.target_card.isEnabled())
+        with patch.object(self.calib.QMessageBox, "question",
+                          return_value=self.calib.QMessageBox.Yes) as ask:
+            window.reset_samples()
+        ask.assert_called_once()
+        self.assertFalse(saved.parent.exists())   # user chose to delete; the empty capture folder goes too
+        self.assertTrue(window.target_card.isEnabled())
+        # The next session after reset gets a new capture folder.
+        with patch.object(self.calib, "find_chessboard_corners", return_value=points):
+            self.assertTrue(window.capture_sample())
+        self.assertNotEqual(Path(window._photo_paths[0]).parent, saved.parent)
+
+    def test_auto_capture_waits_for_steady_board_then_accepts_in_background(self):
+        window = self.collector()
+        points = (np.mgrid[0:8, 0:7].T.reshape(-1, 2).astype(np.float32) * 10).reshape(-1, 1, 2)
+        window._preview_found, window._preview_stable = True, False
+        with patch.object(self.calib, "find_chessboard_corners", return_value=points):
+            window.btn_auto.setChecked(True)
+            window._next_capture_at = 0
+            window._auto_tick()
+            self.assertIsNone(window._pending)          # board still moving
+            self.assertIn("拿穩", window.lbl_status.text())
+            window._preview_stable = True
+            window._auto_tick()
+            window._pending[0].result(timeout=5)
+            window._auto_tick()
+        self.assertEqual(window.captured_count, 1)
+        self.assertGreater(window._next_capture_at, 0)
+        window.btn_auto.setChecked(False)
+        self.assertFalse(window.auto_running)
 
     def test_rescan_updates_live_serials_and_keeps_connected_role(self):
         with patch.object(self.calib, "list_cameras", return_value=[("B", "model"), ("A", "model")]) as scan, \

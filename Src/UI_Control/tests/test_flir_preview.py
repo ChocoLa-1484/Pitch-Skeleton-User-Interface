@@ -15,7 +15,8 @@ class FakeStream:
         self.camera = camera
         self.stop_event = threading.Event()
         self.alive = False
-    def start(self): self.alive = True
+        self.started = None
+    def start(self): self.alive, self.started = True, 1.0
     def is_alive(self): return self.alive and not self.stop_event.is_set()
     def join(self): self.alive = False
     def snapshot(self): return None, 0, "waiting", {}
@@ -208,6 +209,51 @@ class PreviewTests(unittest.TestCase):
         self.assertIn("接收已關閉", tile.image.text())
         service.set_enabled.assert_not_called()
         window.close()
+
+    def test_preview_copy_failure_does_not_stop_acquisition(self):
+        sdk, camera = self.make_camera()
+        sdk.Image.Create.return_value.DeepCopy.side_effect = RuntimeError("out of memory")
+        worker = CameraStream(camera, sdk)
+        image = camera.GetNextImage.return_value
+        image.IsIncomplete.return_value = False
+        clock, count = [100.0], [0]
+        def release():
+            count[0] += 1
+            clock[0] += 0.1  # every frame is due for a preview sample
+            if count[0] == 10:
+                worker.stop_event.set()
+        image.Release.side_effect = release
+        with patch("Src.cameras.flir_preview.time.monotonic", side_effect=lambda: clock[0]):
+            worker.run()
+        stats = worker.snapshot()[3]
+        self.assertEqual(stats["received"], 10)
+        self.assertEqual(stats["errors"], 0)
+        self.assertGreaterEqual(sdk.Image.Create.call_count, 3)
+
+    def test_failed_reopen_attempts_are_not_counted_as_reconnects(self):
+        service = PreviewService(sdk=object())
+        cameras = {"0": object()}
+        with patch("Src.cameras.flir_preview.CameraStream", FakeStream):
+            service.reconcile(cameras)
+            for _ in range(3):  # Init() fails: the stream dies without ever streaming
+                stream = service.streams["0"]
+                stream.alive, stream.started = False, None
+                service.reconcile(cameras)
+            self.assertEqual(service.snapshot()[0]["0"][3]["reconnects"], 0)
+
+    def test_reenabling_while_old_stream_is_stopping_restarts_immediately(self):
+        service = PreviewService(sdk=object())
+        cameras = {"0": object()}
+        with patch("Src.cameras.flir_preview.CameraStream", FakeStream):
+            service.reconcile(cameras)
+            old = service.streams["0"]
+            service.set_enabled("0", acquisition=False)
+            old.is_alive = lambda: old.alive  # still shutting down
+            service.set_enabled("0", acquisition=True)
+            service.reconcile(cameras)
+            self.assertIsNot(service.streams["0"], old)
+            self.assertFalse(old.alive)
+            self.assertEqual(service.snapshot()[0]["0"][3]["reconnects"], 0)
 
     def test_incomplete_frames_and_gaps_are_separate(self):
         sdk, camera = self.make_camera()

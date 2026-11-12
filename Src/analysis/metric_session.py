@@ -141,7 +141,7 @@ def infer_annotations(session, model):
     Exactly one detected person is required in each image. Camera/time identity
     still needs visual confirmation. This never rewrites existing pose JSONs.
     """
-    from mmdet.apis import inference_detector
+    from Src.pose.person_detector import detect_person_boxes
     from mmpose.apis import inference_topdown
     from mmpose.evaluation.functional import nms
 
@@ -151,11 +151,8 @@ def infer_annotations(session, model):
     for name in ("reference", "heel"):
         for camera in ("cf", "cs"):
             frame = session.frame(camera, name)
-            detection = inference_detector(model.detector, frame,
-                                            test_pipeline=model.detector_test_pipeline)
-            pred = detection.pred_instances.cpu().numpy()
-            mask = (pred.labels == model.detect_args.det_cat_id) & (pred.scores >= model.detect_args.score_thr)
-            boxes = np.concatenate([pred.bboxes[mask], pred.scores[mask, None]], axis=1)
+            bboxes, det_scores = detect_person_boxes(model, frame)
+            boxes = np.concatenate([bboxes, det_scores[:, None]], axis=1)
             boxes = boxes[nms(boxes, model.detect_args.nms_thr)] if len(boxes) else boxes
             if len(boxes) != 1:
                 raise ValueError(f"{name}/{camera}: 偵測到 {len(boxes)} 人，請人工選點以確認同一投手。")

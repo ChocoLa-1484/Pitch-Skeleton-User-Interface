@@ -116,7 +116,9 @@ def load_profile_legacy(hand, serials=None):
     fund = json.loads(path.read_text(encoding="utf-8"))
     if (str(fund.get("front")), str(fund.get("side"))) != (front, side):
         raise ValueError("此手別的 F 矩陣與 CF／CS 相機序號不符，請選擇正確的外參檔。")
-    intr_f, intr_s = calib_store.get_intrinsic(front), calib_store.get_intrinsic(side)
+    # The same camera may be CF for both hands, so look up this hand's position first.
+    intr_f = calib_store.get_intrinsic(front, hand, "CF")
+    intr_s = calib_store.get_intrinsic(side, hand, "CS")
     if intr_f is None or intr_s is None:
         raise ValueError("此手別的相機尚未完成內參校正。")
     return {"front": front, "side": side, "K_F": intr_f[0], "dist_F": intr_f[1],

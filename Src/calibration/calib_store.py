@@ -4,12 +4,13 @@
 所有校正產出都放在 Db/Calibration/ 底下（Db 不進 git）：
 
     Db/Calibration/
-    ├─ camera_roles.json            哪台是正面、哪台是側面（calib.py 第 4 區產生）
+    ├─ camera_roles.json            哪台是正面、哪台是側面（校正精靈產生）
     ├─ sessions/<日期_時分秒>_<方法>_SN<正面>_SN<側面>/   每次校正的照片與紀錄（new_session_dir）
     ├─ photos/<日期_時分>/cf、cs/    「2D 相機」分頁拍的照片
-    ├─ intrinsic/
-    │   ├─ intrinsics_all.json      所有相機內參，以序號為鍵（calib.py）
-    │   └─ calib_SN<序號>.npz        單台完整校正資料（calib.py）
+    ├─ Intrinsics/                  只放日期資料夾，沒有總表；讀取時合併所有日期，同一台取最新
+    │   └─ Intrinsic_<日期>/         每天一個資料夾（Windows 不分大小寫，舊的 intrinsic_<日期> 也讀得到）
+    │       ├─ Right_CF|Right_CS|Left_CF|Left_CS/<序號>_<日期>_<隨機碼>/   calib.py 每次拍攝一個資料夾
+    │       └─ Intrinsics_all.json  當天的內參，鍵為 序號_Right_CF（同一台可同時當左右投的 CF，各存一筆）
     └─ extrinsic/
         ├─ selected_points_cf.json  正面標註點（calibrate.py）
         ├─ selected_points_cs.json  側面標註點（calibrate.py）
@@ -25,11 +26,11 @@ import numpy as np
 
 from Src.paths import DB_DIR
 CALIB_DIR = str(DB_DIR / "Calibration")
-INTRINSIC_DIR = os.path.join(CALIB_DIR, "intrinsic")
+INTRINSIC_SUBDIR = "Intrinsics"   # 2026-11-11 由 intrinsic 改名
+INTRINSIC_DIR = os.path.join(CALIB_DIR, INTRINSIC_SUBDIR)
 EXTRINSIC_DIR = os.path.join(CALIB_DIR, "extrinsic")
 
 ROLES_JSON = os.path.join(CALIB_DIR, "camera_roles.json")
-INTRINSICS_JSON = os.path.join(INTRINSIC_DIR, "intrinsics_all.json")
 POINTS_JSON = {
     "cf": os.path.join(EXTRINSIC_DIR, "selected_points_cf.json"),
     "cs": os.path.join(EXTRINSIC_DIR, "selected_points_cs.json"),
@@ -90,23 +91,209 @@ def save_roles(front_sn, side_sn):
 
 
 # ---------- 內參 ----------
+# 內參只存在 Intrinsics/Intrinsic_<日期>/Intrinsics_all.json。讀取時依日期由舊到新合併，
+# 同一序號以最新日期（同一天內以 calibrated_at 較晚者）為準。
+
+HAND_DIRS = {"right": "Right", "left": "Left"}
+VIEWS = ("CF", "CS")
+DATED_INTRINSICS_NAME = "Intrinsics_all.json"
+_DATE_PREFIX = "intrinsic_"
+
+
+def _date_of(name):
+    """Intrinsic_20261111 → '20261111'；不是日期資料夾回傳 None（大小寫不拘）。"""
+    if not name.lower().startswith(_DATE_PREFIX):
+        return None
+    date = name[len(_DATE_PREFIX):]
+    return date if len(date) == 8 and date.isdigit() else None
+
+
+def dated_intrinsic_files():
+    """[(日期, Intrinsics_all.json 路徑)]，由舊到新；讀取當下的 INTRINSIC_DIR，測試可以替換。"""
+    if not os.path.isdir(INTRINSIC_DIR):
+        return []
+    found = []
+    for name in os.listdir(INTRINSIC_DIR):
+        date, folder = _date_of(name), os.path.join(INTRINSIC_DIR, name)
+        if date is None or not os.path.isdir(folder):
+            continue
+        for candidate in os.listdir(folder):
+            if candidate.lower() == DATED_INTRINSICS_NAME.lower():
+                found.append((date, os.path.join(folder, candidate)))
+    return sorted(found)
+
+
+def latest_intrinsics_json():
+    """最新一天的 Intrinsics_all.json；還沒有任何內參時回傳今天的預定路徑（檔案不存在）。"""
+    files = dated_intrinsic_files()
+    if files:
+        return files[-1][1]
+    return os.path.join(intrinsic_date_dir(datetime.now().strftime("%Y%m%d")), DATED_INTRINSICS_NAME)
+
+
+def intrinsic_key(sn, hand=None, view=None):
+    """Intrinsics_all.json 的鍵。同一台相機可能同時當右投與左投的 CF（甚至換位置後焦距不同），
+    所以以「序號＋位置」為鍵：24380115_Right_CF；校正精靈不知道左右投時為 24380115_CF。"""
+    parts = [str(sn)]
+    if hand:
+        parts.append(HAND_DIRS[hand])
+    if view:
+        parts.append(view.upper())
+    return "_".join(parts)
+
+
+def _all_intrinsic_records():
+    """[(排序戳, 序號, hand, view, entry)]，涵蓋所有日期資料夾，由舊到新。
+
+    舊格式以序號為鍵、沒有 serial_number 欄位，鍵本身就是序號。"""
+    records = []
+    for date, path in dated_intrinsic_files():
+        for key, entry in (read_json(path) or {}).items():
+            if not isinstance(entry, dict) or "intrinsic_matrix" not in entry:
+                continue
+            sn = str(entry.get("serial_number") or key)
+            hand = entry.get("pitch_hand") if entry.get("pitch_hand") in HAND_DIRS else None
+            view = str(entry["view"]).upper() if entry.get("view") else None
+            records.append(((date, str(entry.get("calibrated_at", ""))), sn, hand, view, entry))
+    return sorted(records, key=lambda r: r[0])
+
 
 def load_intrinsics():
-    """回傳 {序號: 內參資料}；檔案不存在回傳空 dict。"""
-    return read_json(INTRINSICS_JSON) or {}
+    """回傳 {序號: 內參資料}，每台相機取最新的一次（不分位置）；沒有任何內參回傳空 dict。
+    只用來列出「有哪些相機做過內參」；計算 3D 請用 get_intrinsic(序號, hand, view) 取對應位置的內參。"""
+    return {sn: entry for _, sn, _, _, entry in _all_intrinsic_records()}
 
 
-def save_intrinsic(sn, entry):
-    """寫入或覆蓋單台相機的內參，回傳目前已校正的相機數。"""
-    data = load_intrinsics()
-    data[str(sn)] = entry
-    write_json(INTRINSICS_JSON, data)
-    return len(data)
+def find_intrinsic(sn, hand=None, view=None):
+    """回傳這台相機在這個位置最新的內參條目；找不到回傳 None。
+
+    依序找：同序號＋同左右投＋同 CF/CS → 同序號＋同 CF/CS 且沒記左右投（校正精靈）
+    → 同序號的任何一筆（舊資料沒有記位置）。同一層有多筆時取最新。"""
+    sn = str(sn)
+    view = view.upper() if view else None
+    candidates = [r for r in _all_intrinsic_records() if r[1] == sn]
+    tiers = []
+    if hand and view:
+        tiers.append(lambda r: r[2] == hand and r[3] == view)
+    if view:
+        tiers.append(lambda r: r[2] is None and r[3] == view)
+    tiers.append(lambda r: r[2] is None and r[3] is None)   # 舊格式
+    tiers.append(lambda r: True)
+    for match in tiers:
+        found = [r for r in candidates if match(r)]
+        if found:
+            return found[-1][4]
+    return None
 
 
-def get_intrinsic(sn):
-    """回傳 (K, dist)；該台尚未校正則回傳 None。"""
-    entry = load_intrinsics().get(str(sn))
+def intrinsic_date_dir(date):
+    """date 為 YYYYMMDD；同一天已有舊式小寫資料夾（intrinsic_<日期>）時沿用它。"""
+    if os.path.isdir(INTRINSIC_DIR):
+        for name in os.listdir(INTRINSIC_DIR):
+            if _date_of(name) == date and os.path.isdir(os.path.join(INTRINSIC_DIR, name)):
+                return os.path.join(INTRINSIC_DIR, name)
+    return os.path.join(INTRINSIC_DIR, "Intrinsic_" + date)
+
+
+def rig_dir_name(hand, view):
+    """('right', 'CF') → 'Right_CF'"""
+    return "{}_{}".format(HAND_DIRS[hand], view.upper())
+
+
+def intrinsic_photo_dir(date, hand, view):
+    return os.path.join(intrinsic_date_dir(date), rig_dir_name(hand, view))
+
+
+def new_capture_dir(date, hand, view, sn):
+    """Right_CF/<序號>_<日期>_<隨機碼>，同一天可以拍很多次；只回傳路徑，存第一張時才建立。"""
+    import secrets
+    parent = intrinsic_photo_dir(date, hand, view)
+    while True:
+        path = os.path.join(parent, "{}_{}_{}".format(sn, date, secrets.token_hex(3)))
+        if not os.path.exists(path):
+            return path
+
+
+def _parse_rig(name):
+    """'Right_CF' → ('right', 'CF')；其他回傳 None。"""
+    hand, _, view = name.partition("_")
+    hand, view = hand.lower(), view.upper()
+    return (hand, view) if hand in HAND_DIRS and view in VIEWS else None
+
+
+def parse_intrinsic_photo_dir(folder):
+    """…/Intrinsic_<日期>/Right_CF[/<序號>_<日期>_<隨機碼>] → (日期, hand, view, 序號或 None)。
+
+    選 Right_CF 這層時沒有序號；選到單次拍攝的資料夾時，序號取資料夾名稱開頭。不是這種結構回傳 None。
+    """
+    parts = os.path.normpath(str(folder)).split(os.sep)
+    sn = None
+    if len(parts) >= 3 and _parse_rig(parts[-1]) is None and _parse_rig(parts[-2]):
+        sn = parts[-1].split("_", 1)[0] or None
+        parts = parts[:-1]
+    if len(parts) < 2:
+        return None
+    date, rig = _date_of(parts[-2]), _parse_rig(parts[-1])
+    if date is None or rig is None:
+        return None
+    return (date,) + rig + (sn,)
+
+
+def rekey_legacy_intrinsics(data):
+    """舊格式只以序號為鍵；條目裡有記位置的，改用自己的 序號_Right_CF 鍵，避免被別的位置覆蓋。"""
+    result = {}
+    for key, entry in data.items():
+        if isinstance(entry, dict) and "serial_number" not in entry and "intrinsic_matrix" in entry:
+            hand = entry.get("pitch_hand") if entry.get("pitch_hand") in HAND_DIRS else None
+            view = str(entry["view"]).upper() if entry.get("view") in VIEWS else None
+            entry = dict(entry, serial_number=str(key))
+            key = intrinsic_key(key, hand, view)
+        result[key] = entry
+    return result
+
+
+def to_relative_path(path, base_dir):
+    """存檔用：相對於 base_dir、以 / 分隔，整個 Db 搬到別台電腦仍對得上。
+    路徑大小寫以磁碟上實際名稱為準；不同磁碟機無法相對時保留原路徑。"""
+    from pathlib import Path
+    if not path or not os.path.isabs(str(path)):
+        return path
+    try:
+        relative = os.path.relpath(str(Path(path).resolve()), str(Path(base_dir).resolve()))
+    except ValueError:
+        return str(path)
+    return relative.replace(os.sep, "/")
+
+
+def resolve_intrinsic_path(path, base_dir):
+    """讀檔用：Intrinsics_all.json 裡的照片路徑（相對或舊的絕對路徑）→ 絕對路徑。"""
+    from pathlib import Path
+    return str((Path(base_dir) / path).resolve()) if not os.path.isabs(str(path)) else str(path)
+
+
+def save_dated_intrinsic(date, sn, entry, hand=None, view=None):
+    """寫入 Intrinsic_<日期>/Intrinsics_all.json，鍵為 序號_Right_CF（見 intrinsic_key），
+    同一天同一台在同一位置重做才會覆蓋。照片路徑存成相對於該日期資料夾的路徑。回傳 (路徑, 條目數)。"""
+    day_dir = intrinsic_date_dir(date)
+    path = os.path.join(day_dir, DATED_INTRINSICS_NAME)
+    data = rekey_legacy_intrinsics(read_json(path) or {})
+    entry = dict(entry, serial_number=str(sn))
+    if entry.get("source_images"):
+        entry["source_images"] = [to_relative_path(p, day_dir) for p in entry["source_images"]]
+    if entry.get("capture_dir"):
+        entry["capture_dir"] = to_relative_path(entry["capture_dir"], day_dir)
+    if hand:
+        entry["pitch_hand"] = hand
+    if view:
+        entry["view"] = view.upper()
+    data[intrinsic_key(sn, hand, view)] = entry
+    write_json(path, data)
+    return path, len(data)
+
+
+def get_intrinsic(sn, hand=None, view=None):
+    """回傳 (K, dist)；該台尚未校正則回傳 None。給了 hand/view 時優先用那個位置的內參（見 find_intrinsic）。"""
+    entry = find_intrinsic(sn, hand, view)
     if entry is None:
         return None
     K = np.array(entry["intrinsic_matrix"], dtype=np.float64)
@@ -152,10 +339,11 @@ def load_stereo_calibration():
         return None, f"找不到相機角色設定 {ROLES_JSON}（請用 calib.py 第 4 區指定正面/側面）"
     front, side = roles
 
-    intr_f = get_intrinsic(front)
+    # camera_roles.json 是舊的單一機架（視為右投）；左右投分開的請用 pitch_profiles
+    intr_f = get_intrinsic(front, "right", "CF")
     if intr_f is None:
         return None, f"正面相機 SN{front} 尚未做內參校正"
-    intr_s = get_intrinsic(side)
+    intr_s = get_intrinsic(side, "right", "CS")
     if intr_s is None:
         return None, f"側面相機 SN{side} 尚未做內參校正"
 

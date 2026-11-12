@@ -296,12 +296,15 @@ class PoseEstimater:
 
         # 進行物件偵測
 
-        result = inference_detector(self.model.detector, img, test_pipeline= self.model.detector_test_pipeline) # prediction
-        pred_instances = result.pred_instances
-        det_result = pred_instances[pred_instances.scores > self.model.detect_args.score_thr].cpu().numpy()
-        # 篩選指定類別的邊界框
-        bboxes = det_result.bboxes[det_result.labels == self.model.detect_args.det_cat_id]
-        scores = det_result.scores[det_result.labels == self.model.detect_args.det_cat_id]
+        if getattr(self.model, 'detector_backend', 'mmdet') == 'ultralytics':
+            bboxes, scores = self.model.detector(img)  # YOLO26, class person only
+        else:
+            result = inference_detector(self.model.detector, img, test_pipeline= self.model.detector_test_pipeline) # prediction
+            pred_instances = result.pred_instances
+            det_result = pred_instances[pred_instances.scores > self.model.detect_args.score_thr].cpu().numpy()
+            # 篩選指定類別的邊界框
+            bboxes = det_result.bboxes[det_result.labels == self.model.detect_args.det_cat_id]
+            scores = det_result.scores[det_result.labels == self.model.detect_args.det_cat_id]
         bboxes = bboxes[nms(np.hstack((bboxes, scores[:, None])), self.model.detect_args.nms_thr), :4]
         # Detection indices are not persistent identities. Lock one central
         # pitcher by geometry and always expose the same logical person ID.

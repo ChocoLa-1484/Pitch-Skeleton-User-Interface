@@ -154,6 +154,19 @@ class PitcherInferenceTests(unittest.TestCase):
         self.estimator.reset()
         self.assertIsNone(self.estimator.pitcher_target.last_bbox)
 
+    def test_ultralytics_backend_feeds_selector_without_mmdet(self):
+        pitcher = [400, 200, 600, 800]
+        boxes = np.array([[0, 50, 300, 950], pitcher], dtype=np.float32)
+        detector = lambda image: (boxes, np.array([0.9, 0.95], dtype=np.float32))
+        self.estimator.model.detector_backend = 'ultralytics'
+        self.estimator.model.detector = detector
+        pred = self.pose(pitcher)
+        with patch.object(self.module, 'inference_detector') as mmdet_call,              patch.object(self.module, 'inference_topdown', return_value=[object()]) as infer,              patch.object(self.module, 'merge_data_samples', return_value={'pred_instances': pred}):
+            _, ids = self.estimator.processImage(self.image)
+        mmdet_call.assert_not_called()
+        self.assertEqual(ids, [1])
+        np.testing.assert_array_equal(infer.call_args[0][2], [pitcher])
+
 
 if __name__ == '__main__':
     unittest.main()

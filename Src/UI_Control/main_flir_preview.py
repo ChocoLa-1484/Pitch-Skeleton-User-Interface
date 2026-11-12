@@ -47,6 +47,7 @@ class CameraTile(QFrame):
         self.info.setWordWrap(True)
         self.info.setMinimumHeight(110)
         layout.addWidget(self.info)
+        self._shown = None  # (frame object, label size) last rendered, to skip redundant rescales
 
     def display(self, frame, fps, status, stats=None):
         stats = stats or {}
@@ -56,7 +57,7 @@ class CameraTile(QFrame):
             control.blockSignals(True)
             control.setChecked(checked)
             control.blockSignals(False)
-        self.info.setToolTip(status + "\n上次中斷：" + stats.get("last_disconnect", "無"))
+        self.info.setToolTip(status + "\n上次中斷：" + (stats.get("last_disconnect") or "無"))
         configured = stats.get("configured_fps")
         rate = "未知" if configured is None else "%.1f" % configured
         self.info.setText(
@@ -69,9 +70,14 @@ class CameraTile(QFrame):
              stats.get("reconnects", 0), status[:90]))
         if frame is None or not receiving or not showing:
             self.image.clear()
+            self._shown = None
             self.image.setText("接收已關閉" if not receiving else
                                "畫面已關閉 · 接收繼續" if not showing else "等待攝影機影像")
             return
+        key = (frame, self.image.size())
+        if self._shown is not None and self._shown[0] is key[0] and self._shown[1] == key[1]:
+            return  # Same frame at same size: nothing to redraw.
+        self._shown = key
         height, width, _ = frame.shape
         image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_RGB888)
         self.image.setPixmap(QPixmap.fromImage(image).scaled(

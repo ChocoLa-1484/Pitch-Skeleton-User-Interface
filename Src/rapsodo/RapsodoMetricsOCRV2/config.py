@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
@@ -8,7 +10,12 @@ CAPTURE_FPS: int = 1
 # Paths
 # ---------------------------------------------------------------------------
 OUTPUT_JSON_PATH: str = r"C:\rapsodo-metrics-ocr\rapsodo_data.json"
-OUTPUT_JSON_PITCHING: str = r"C:\rapsodo-metrics-ocr\rapsodo_data_pitching.json"
+# 與 V1 相同，投球資料統一放在專案的 Db/Rapsodo/
+try:
+    from Src.paths import RAPSODO_DATA_DIR as _RAPSODO_DATA_DIR
+except ImportError:  # 單獨執行此工具、Src 不在 sys.path 時
+    _RAPSODO_DATA_DIR = Path(__file__).resolve().parents[3] / "Db" / "Rapsodo"
+OUTPUT_JSON_PITCHING: str = str(_RAPSODO_DATA_DIR / "rapsodo_data_pitching.json")
 BACKUP_DIR: str       = r"C:\rapsodo-metrics-ocr\backup"
 LOG_FILE: str         = r"C:\rapsodo-metrics-ocr\rapsodo_ocr.log"
 
